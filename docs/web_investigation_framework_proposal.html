@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Web Investigation Framework Proposal</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.45; }
+    h1 { color: #17365d; font-size: 24pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 16pt; margin-top: 20pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    h3 { color: #2f5597; font-size: 12.5pt; margin-top: 14pt; }
+    .subtitle { color: #5b6573; font-size: 12pt; margin-bottom: 22pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .recommendation { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    pre { background: #f3f4f6; border: 1px solid #d1d5db; padding: 10pt; font-family: "Courier New", monospace; font-size: 8.5pt; white-space: pre-wrap; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    tr:nth-child(even) td { background: #f7f9fb; }
+    li { margin-bottom: 5pt; }
+    .footer-note { color: #6b7280; font-size: 9pt; margin-top: 24pt; }
+  </style>
+</head>
+<body>
+  <h1>Web Investigation Framework Proposal</h1>
+  <p class="subtitle">Current code assessment and a design for a reusable, pipeline-based framework</p>
+
+  <div class="summary">
+    <strong>Executive summary.</strong> The current project is a Streamlit-based modular monolith containing two major capabilities: OSINT and Dynamic Web Investigation. It already has useful modules and some framework-like abstractions, particularly in the OSINT collectors. The recommended next step is to create a UI-independent, pipeline-based investigation framework with stable models, stage contracts, repository interfaces, and plugin registries. FastAPI microservices can then wrap this framework without placing business logic in API routes.
+  </div>
+
+  <h2>1. Current Form of the Code</h2>
+  <p>The project is currently organized as one application with modular features:</p>
+  <pre>Web Investigator application
+|
+|-- Streamlit presentation layer
+|-- Dynamic web investigation module
+|-- OSINT investigation module
+|-- Database and storage code
+|-- Reporting code
+`-- Tests</pre>
+  <p>This is best described as a <strong>modular monolith</strong>. Its capabilities are logically separated in Python modules, but they execute in the same application and are invoked through direct imports.</p>
+
+  <h3>1.1 Application entry point</h3>
+  <p><code>app.py</code> is the main Streamlit application. It creates the UI, manages session state, selects workspaces, validates targets, creates investigation IDs, starts Playwright investigations, and displays results. Consequently, presentation and workflow coordination are currently coupled.</p>
+
+  <h3>1.2 Dynamic Web Investigation component</h3>
+  <pre>core/
+|-- browser_engine.py
+|-- playwright_session.py
+|-- nav_engine.py
+|-- validator.py
+|-- keyword_detector.py
+|-- payment_detector.py
+`-- image_annotator.py</pre>
+  <p>These modules cooperate as one feature. The component is not yet an independent service or reusable framework module because it uses concrete browser, database, configuration, and callback implementations.</p>
+
+  <h3>1.3 OSINT component</h3>
+  <pre>osint/
+|-- collectors/
+|-- orchestrator.py
+|-- models.py
+|-- normalizer.py
+|-- resolver.py
+|-- risk.py
+|-- storage.py
+|-- evidence_capture.py
+`-- report modules</pre>
+  <p>The OSINT component is closer to a reusable framework because it already has a collector base class, collector context, collector registry, standardized collector results, an orchestrator, data models, a repository layer, and report builders.</p>
+
+  <h3>1.4 UI, persistence, and tests</h3>
+  <p>The <code>ui/</code> directory contains Streamlit presentation logic, although some workflow decisions remain in UI code. Persistence is split between <code>database/db_manager.py</code> and <code>osint/storage.py</code>, with different interfaces and schemas. The tests currently provide strong groundwork around OSINT target resolution, foundations, and domain intelligence, but a framework will also need pipeline, plugin-contract, Dynamic engine, storage-adapter, retry, and failure tests.</p>
+
+  <h2>2. Application Versus Framework</h2>
+  <p>An application directly executes a particular workflow:</p>
+  <pre>engine = PlaywrightInvestigationEngine(...)
+engine.run_investigation(...)</pre>
+  <p>A framework defines stable contracts so that implementations can be inserted or replaced:</p>
+  <pre>pipeline.register_stage(OSINTDiscoveryStage())
+pipeline.register_stage(DynamicBrowserStage())
+pipeline.register_stage(CustomMalwareScanStage())</pre>
+  <p>A framework should define how investigations, stages, results, errors, progress, retries, cancellation, evidence, storage, extensions, and reports are represented.</p>
+
+  <h2>3. Recommended Framework Concept</h2>
+  <p>The proposed <strong>Web Investigation Framework</strong> should accept a target, execute configured stages, correlate evidence, assess risk, and produce unified results. It must not depend directly on Streamlit or FastAPI.</p>
+  <pre>                         Streamlit UI
+                              |
+                         FastAPI APIs
+                              |
+                              v
+                  Web Investigation Framework
+                              |
+            +-----------------+-----------------+
+            |                 |                 |
+            v                 v                 v
+        OSINT module    Dynamic module     Future modules</pre>
+  <p>The same framework can then be used by Streamlit, FastAPI, a CLI, workers, scheduled jobs, and automated tests.</p>
+
+  <h2>4. Proposed Project Structure</h2>
+  <pre>web-investigator/
+|
+|-- investigator/
+|   |-- core/
+|   |   |-- models.py
+|   |   |-- context.py
+|   |   |-- pipeline.py
+|   |   |-- stage.py
+|   |   |-- registry.py
+|   |   |-- events.py
+|   |   |-- exceptions.py
+|   |   `-- configuration.py
+|   |
+|   |-- modules/
+|   |   |-- osint/
+|   |   |-- dynamic_web/
+|   |   |-- correlation/
+|   |   |-- risk/
+|   |   `-- reporting/
+|   |
+|   |-- ports/
+|   |   |-- repository.py
+|   |   |-- evidence_store.py
+|   |   |-- task_queue.py
+|   |   `-- event_publisher.py
+|   |
+|   `-- adapters/
+|       |-- sqlite/
+|       |-- postgres/
+|       |-- local_files/
+|       `-- object_storage/
+|
+|-- services/
+|   |-- osint_api/
+|   |-- dynamic_api/
+|   `-- pipeline_api/
+|
+|-- workers/
+|   |-- osint_worker/
+|   `-- dynamic_worker/
+|
+|-- streamlit_app.py
+|-- app_pages/
+|-- tests/
+`-- pyproject.toml</pre>
+
+  <h2>5. Central Framework Concepts</h2>
+  <h3>5.1 Investigation case</h3>
+  <p>One object should represent the complete case:</p>
+  <pre>@dataclass
+class InvestigationCase:
+    case_id: str
+    original_target: str
+    status: str
+    created_at: datetime
+    selected_modules: list[str]
+    target_ids: list[str]</pre>
+  <pre>CASE_2026_000123
+|-- OSINT run
+|-- Dynamic run for example.com
+|-- Dynamic run for payments.example.com
+|-- Correlated evidence
+`-- Final report</pre>
+
+  <h3>5.2 Investigation context</h3>
+  <p>Every stage receives a common context that carries results forward:</p>
+  <pre>@dataclass
+class InvestigationContext:
+    case: InvestigationCase
+    targets: list[Target]
+    observations: list[Observation]
+    evidence: list[Evidence]
+    findings: list[Finding]
+    metadata: dict</pre>
+
+  <h3>5.3 Standard pipeline stage</h3>
+  <pre>class InvestigationStage(ABC):
+    name: str
+
+    @abstractmethod
+    def execute(
+        self,
+        context: InvestigationContext,
+    ) -&gt; StageResult:
+        pass</pre>
+  <p>Possible stages include Target Validation, Target Resolution, OSINT Collection, Candidate Selection, Dynamic Crawl, Keyword Detection, Payment Detection, Evidence Correlation, Risk Assessment, and Report Generation.</p>
+
+  <h3>5.4 Standard result and status</h3>
+  <pre>@dataclass
+class StageResult:
+    stage_name: str
+    status: str
+    observations: list[Observation]
+    evidence: list[Evidence]
+    errors: list[StageError]
+    started_at: datetime
+    completed_at: datetime</pre>
+  <p>Recommended statuses:</p>
+  <pre>PENDING
+QUEUED
+RUNNING
+WAITING_FOR_INPUT
+COMPLETED
+PARTIAL
+FAILED
+CANCELLED
+SKIPPED</pre>
+  <p><code>WAITING_FOR_INPUT</code> is especially useful for target approval and manual browser authentication.</p>
+
+  <h3>5.5 Pipeline execution</h3>
+  <pre>pipeline = InvestigationPipeline(
+    stages=[
+        ValidateTargetStage(),
+        ResolveTargetStage(),
+        OSINTCollectionStage(),
+        CandidateSelectionStage(),
+        DynamicCrawlStage(),
+        EvidenceCorrelationStage(),
+        RiskAssessmentStage(),
+        ReportGenerationStage(),
+    ]
+)
+
+result = pipeline.run(case)</pre>
+  <p>The pipeline should support optional stages, dependencies, retries, timeouts, cancellation, progress events, resumability, and manual approval points.</p>
+
+  <h2>6. Plugin and Extension Model</h2>
+  <p>A framework should allow new capabilities to be registered without modifying the core engine.</p>
+  <h3>6.1 Collectors</h3>
+  <pre>class DNSCollector(Collector):
+    name = "dns"
+
+    def collect(self, target, context):
+        ...
+
+registry.register_collector(ThreatFeedCollector())</pre>
+  <p>Potential collectors include DNS, RDAP, search, Wayback, browser, and document collectors.</p>
+
+  <h3>6.2 Detectors</h3>
+  <pre>class Detector:
+    name: str
+
+    def detect(self, page: PageArtifact) -&gt; list[Finding]:
+        ...</pre>
+  <p>Implementations could include Keyword, Payment, Gaming, Authentication, QR Code, Malware Indicator, and Crypto Wallet detectors.</p>
+
+  <h3>6.3 Correlators and reporters</h3>
+  <p>Correlators can connect domain, identity, payment, and infrastructure evidence. Reporter plugins can generate JSON, CSV, HTML, DOCX, or PDF output.</p>
+
+  <h2>7. Configuration-Driven Pipelines</h2>
+  <p>Pipeline definitions should be configuration-driven instead of hardcoded:</p>
+  <pre>pipelines:
+  complete_investigation:
+    stages:
+      - target_validation
+      - target_resolution
+      - osint_collection
+      - analyst_target_selection
+      - dynamic_investigation
+      - evidence_correlation
+      - risk_assessment
+      - report_generation
+
+  passive_osint:
+    stages:
+      - target_validation
+      - target_resolution
+      - osint_collection
+      - risk_assessment
+      - report_generation
+
+  dynamic_only:
+    stages:
+      - target_validation
+      - dynamic_investigation
+      - risk_assessment
+      - report_generation</pre>
+  <p>The UI can present these definitions as investigation modes while the framework decides which stages execute.</p>
+
+  <h2>8. Framework and Microservices</h2>
+  <p>The framework should be built before microservice deployment:</p>
+  <pre>Framework
+|-- Contracts and models
+|-- Pipeline engine
+|-- OSINT stages
+|-- Dynamic stages
+`-- Reporting</pre>
+  <p>Microservices then become thin deployment wrappers:</p>
+  <pre>OSINT FastAPI service
+    `-- imports OSINT framework modules
+
+Dynamic FastAPI service
+    `-- imports Dynamic framework modules
+
+Pipeline FastAPI service
+    `-- imports pipeline framework modules</pre>
+  <p>Business logic should not be embedded inside FastAPI routes. Routes should validate requests, call application services, and return responses.</p>
+
+  <h2>9. Framework Boundaries</h2>
+  <p>The core framework should not know about Streamlit widgets, HTTP request objects, FastAPI responses, CSS, UI session state, database connection details, or deployment mechanisms.</p>
+  <pre>UI / API layer
+      |
+      v
+Application service layer
+      |
+      v
+Framework and domain layer
+      |
+      v
+Infrastructure adapters</pre>
+  <p>This separation keeps the investigation logic reusable and independently testable.</p>
+
+  <h2>10. Repository Strategy</h2>
+  <p>A separate Git repository is not required initially. A modular monorepo is recommended while contracts are evolving:</p>
+  <pre>One Git repository
+|-- Framework package
+|-- OSINT service
+|-- Dynamic service
+|-- Streamlit UI
+`-- Tests</pre>
+  <p>Separate repositories become useful when different teams own services, release schedules differ, access permissions differ, and framework contracts have stabilized.</p>
+
+  <h2>11. Recommended Development Sequence</h2>
+  <ol>
+    <li><strong>Define framework contracts:</strong> create InvestigationCase, InvestigationContext, InvestigationStage, StageResult, Observation, Evidence, repository interfaces, and the pipeline status model. Preserve existing behavior.</li>
+    <li><strong>Adapt existing modules:</strong> wrap the OSINT orchestrator as an OSINT stage, the Playwright engine as a Dynamic stage, the risk scorer as a Risk stage, and report builders as Reporter plugins.</li>
+    <li><strong>Add the unified pipeline:</strong> connect stages using a common case ID and shared context. Add pause points for candidate approval, browser login, and analyst review.</li>
+    <li><strong>Separate the UI:</strong> make Streamlit call application services rather than directly constructing repositories and engines.</li>
+    <li><strong>Add FastAPI:</strong> expose OSINT, Dynamic, and Pipeline APIs using thin endpoint layers.</li>
+    <li><strong>Add production infrastructure:</strong> introduce PostgreSQL, Redis or RabbitMQ, workers, object storage, authentication, monitoring, and container isolation.</li>
+  </ol>
+
+  <h2>12. Recommended Target Architecture</h2>
+  <pre>Web Investigation Framework
+|
+|-- Core
+|   |-- common models
+|   |-- pipeline engine
+|   |-- stage contracts
+|   `-- event contracts
+|
+|-- Investigation modules
+|   |-- OSINT
+|   |-- Dynamic web
+|   |-- Evidence correlation
+|   |-- Risk scoring
+|   `-- Reporting
+|
+`-- Applications
+    |-- Streamlit UI
+    |-- FastAPI services
+    |-- Background workers
+    `-- CLI</pre>
+
+  <div class="recommendation">
+    <strong>Final recommendation.</strong> Create a modular, pipeline-based investigation framework first. Preserve the working OSINT and Dynamic implementations and place adapters around them. Once the contracts and pipeline boundaries are stable, expose the components as FastAPI microservices. This provides reuse and extensibility without prematurely rewriting working investigation logic.
+  </div>
+
+  <p class="footer-note">Prepared for the Web Investigator project. This document is an architectural proposal; the framework structure and service boundaries described here have not yet been implemented.</p>
+</body>
+</html>

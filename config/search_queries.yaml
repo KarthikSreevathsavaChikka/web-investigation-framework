@@ -1,0 +1,455 @@
+version: 1
+defaults:
+  results_per_query: 10
+  target_requirement: required
+queries:
+  - id: B001
+    category: documents
+    name: Main-brand public PDFs
+    priority: critical
+    enabled: true
+    query: 'filetype:pdf "{main_brand}"'
+    evidence_keywords: [deposit, withdrawal, payment, wallet, betting, casino, bonus, registration, licence, license, certificate, legal notice, APK]
+    document_type: pdf
+  - id: B002
+    category: reputation
+    name: Main-brand reviews
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" reviews'
+    evidence_keywords: [review, reviews, rating, experience]
+  - id: B003
+    category: external_complaints
+    name: Main-brand complaints
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" complaints'
+    evidence_keywords: [complaint, complaints, scam, fraud, problem]
+  - id: B004
+    category: money_flow
+    name: Main-brand withdrawal evidence
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" withdrawal'
+    evidence_keywords: [withdrawal, cash out, payout, money not received, pending]
+  - id: B005
+    category: money_flow
+    name: Main-brand deposit evidence
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" deposit'
+    evidence_keywords: [deposit, add money, add funds, not credited]
+  - id: B006
+    category: payment_methods
+    name: Main-brand payment evidence
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" payment'
+    evidence_keywords: [payment, UPI, PhonePe, Google Pay, Paytm, bank transfer, crypto]
+  - id: B007
+    category: legal_operator
+    name: Main-brand registration PDFs
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" registration filetype:pdf'
+    evidence_keywords: [registration, registered, incorporation, company]
+    document_type: pdf
+  - id: B008
+    category: certificates_licences
+    name: Main-brand licence PDFs
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" licence filetype:pdf'
+    evidence_keywords: [licence, license, licensed, operator]
+    document_type: pdf
+  - id: B009
+    category: certificates_licences
+    name: Main-brand certificate PDFs
+    priority: critical
+    enabled: true
+    query: '"{main_brand}" certificate filetype:pdf'
+    evidence_keywords: [certificate, certification, incorporation, licence, license]
+    document_type: pdf
+  - id: B010
+    category: reputation
+    name: Exact-domain reviews
+    priority: critical
+    enabled: true
+    query: '"{domain}" reviews'
+    evidence_keywords: [review, reviews, complaint, rating, experience]
+  - id: B011
+    category: money_flow
+    name: Exact-domain withdrawal evidence
+    priority: critical
+    enabled: true
+    query: '"{domain}" withdrawal'
+    evidence_keywords: [withdrawal, pending, failed, rejected, payout]
+  - id: B012
+    category: documents
+    name: Exact-domain public-document search
+    priority: critical
+    enabled: true
+    query: '"{domain}" filetype:pdf'
+    evidence_keywords: [deposit, withdrawal, payment, wallet, betting, casino, registration, licence, license, certificate]
+    document_type: pdf
+  - id: Q001
+    category: money_flow
+    name: Strong money-flow evidence
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} ("deposit" OR "add money" OR "withdrawal" OR "withdraw money" OR "cash out")
+      ("wallet" OR "balance" OR "payment" OR "bank" OR "UPI")
+  - id: Q002
+    category: payment_methods
+    name: Payment methods
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} ("payment method" OR "deposit method" OR "withdrawal method")
+      ("UPI" OR "PhonePe" OR "Google Pay" OR "GPay" OR "Paytm" OR "bank transfer" OR "IMPS" OR "NEFT" OR "RTGS" OR "USDT" OR "Bitcoin")
+  - id: Q003
+    category: money_flow
+    name: Deposit evidence
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} ("deposit money" OR "make a deposit" OR "add funds" OR "add cash" OR "deposit amount" OR "minimum deposit" OR "deposit bonus")
+  - id: Q004
+    category: money_flow
+    name: Withdrawal evidence
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} ("withdraw money" OR "make a withdrawal" OR "cash out" OR "withdrawal amount" OR "minimum withdrawal" OR "withdrawal time" OR "withdrawal limit")
+  - id: Q005
+    category: external_complaints
+    name: Withdrawal complaints
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" -site:{domain} ("withdrawal pending" OR "withdrawal failed" OR "withdrawal rejected" OR "unable to withdraw" OR "withdrawal problem" OR "money not received")
+  - id: Q006
+    category: external_complaints
+    name: Deposit complaints
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" -site:{domain} ("deposit pending" OR "deposit failed" OR "deposit not credited" OR "money deducted" OR "payment failed" OR "balance not updated")
+  - id: Q007
+    category: payment_proof
+    name: Payment or withdrawal proof
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" -site:{domain} ("payment proof" OR "withdrawal proof" OR "deposit proof" OR "payout proof" OR "payment screenshot" OR "transaction screenshot")
+  - id: Q008
+    category: reputation
+    name: Reviews complaints and fraud allegations
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" -site:{domain} ("review" OR "complaint" OR "user experience" OR "scam" OR "fraud" OR "fake" OR "legit" OR "trusted")
+  - id: Q009
+    category: gambling_activity
+    name: Betting and real-money activity
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} ("real money" OR "cash betting" OR "place a bet" OR "sports betting" OR "live betting" OR "in-play betting" OR "bet slip" OR "bet history" OR "potential winnings")
+  - id: Q010
+    category: gambling_activity
+    name: Casino and game categories
+    priority: medium
+    enabled: true
+    query: >
+      site:{domain} ("online casino" OR "live casino" OR "Aviator" OR "crash game" OR "Teen Patti" OR "Andar Bahar" OR "Dragon Tiger" OR "roulette" OR "baccarat" OR "slots")
+  - id: Q011
+    category: money_flow
+    name: Wallet and transaction history
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} ("main wallet" OR "bonus wallet" OR "wallet balance" OR "account balance" OR "transaction history" OR "deposit history" OR "withdrawal history" OR "bet history")
+  - id: Q012
+    category: promotions
+    name: Bonus and wagering requirements
+    priority: medium
+    enabled: true
+    query: >
+      site:{domain} ("welcome bonus" OR "deposit bonus" OR "cashback" OR "free bet" OR "promotional offer" OR "bonus terms" OR "wagering requirement" OR "turnover requirement")
+  - id: Q013
+    category: account_kyc
+    name: Login registration and KYC
+    priority: medium
+    enabled: true
+    query: >
+      site:{domain} ("login" OR "register" OR "sign up" OR "OTP verification" OR "mobile verification" OR "KYC" OR "identity verification" OR "PAN card" OR "Aadhaar")
+  - id: Q014
+    category: account_kyc
+    name: Account restrictions
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" ("account blocked" OR "account suspended" OR "account frozen" OR "login problem" OR "verification failed" OR "KYC rejected" OR "funds frozen")
+  - id: Q015
+    category: legal_operator
+    name: Terms and financial policies
+    priority: medium
+    enabled: true
+    query: >
+      site:{domain} ("terms and conditions" OR "deposit policy" OR "withdrawal policy" OR "refund policy" OR "payment policy" OR "bonus policy" OR "responsible gambling")
+  - id: Q016
+    category: legal_operator
+    name: Operator licence and ownership
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR site:{domain}) ("operator" OR "operated by" OR "owned by" OR "company name" OR "registered office" OR "gambling licence" OR "gaming license" OR "licensed by")
+  - id: Q017
+    category: support_social
+    name: Customer-support channels
+    priority: medium
+    enabled: true
+    query: >
+      ("{domain}" OR site:{domain}) ("customer support" OR "live chat" OR "help centre" OR "WhatsApp" OR "Telegram" OR "contact number" OR "support email")
+  - id: Q018
+    category: support_social
+    name: Telegram discovery
+    priority: medium
+    enabled: true
+    query: >
+      "{domain}" (site:t.me OR site:telegram.me) ("deposit" OR "withdrawal" OR "betting ID" OR "payment" OR "UPI" OR "customer support")
+  - id: Q019
+    category: support_social
+    name: X and Twitter discovery
+    priority: medium
+    enabled: true
+    query: >
+      "{domain}" site:x.com ("withdrawal" OR "deposit" OR "payment" OR "betting" OR "complaint" OR "scam")
+  - id: Q020
+    category: support_social
+    name: Facebook and Instagram discovery
+    priority: medium
+    enabled: true
+    query: >
+      "{domain}" (site:facebook.com OR site:instagram.com) ("betting" OR "casino" OR "deposit" OR "withdrawal" OR "bonus" OR "WhatsApp")
+  - id: Q021
+    category: support_social
+    name: YouTube discovery
+    priority: medium
+    enabled: true
+    query: >
+      "{domain}" site:youtube.com ("review" OR "registration" OR "deposit" OR "withdrawal" OR "payment proof" OR "how to play")
+  - id: Q022
+    category: support_social
+    name: Reddit and Quora discussions
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" (site:reddit.com OR site:quora.com) ("review" OR "withdrawal" OR "deposit" OR "payment" OR "complaint" OR "scam")
+  - id: Q023
+    category: applications
+    name: APK and mobile application discovery
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") ("APK" OR "Android app" OR "mobile app" OR "app download" OR "download APK" OR filetype:apk)
+  - id: Q024
+    category: mirrors
+    name: Mirror and alternative domains
+    priority: high
+    enabled: true
+    query: >
+      "{domain}" ("mirror site" OR "alternative domain" OR "new domain" OR "working link" OR "official link" OR "redirect" OR "blocked domain")
+  - id: Q025
+    category: indexed_pages
+    name: Indexed financial URLs
+    priority: high
+    enabled: true
+    query: >
+      site:{domain} (inurl:deposit OR inurl:withdraw OR inurl:wallet OR inurl:payment OR inurl:transaction OR inurl:cashier OR inurl:banking OR inurl:payout)
+  - id: Q026
+    category: indexed_pages
+    name: Indexed betting URLs
+    priority: medium
+    enabled: true
+    query: >
+      site:{domain} (inurl:bet OR inurl:sports OR inurl:casino OR inurl:live OR inurl:games OR inurl:aviator OR inurl:bonus OR inurl:promotion)
+  - id: Q027
+    category: indexed_pages
+    name: Indexed account URLs
+    priority: medium
+    enabled: true
+    query: >
+      site:{domain} (inurl:login OR inurl:register OR inurl:signup OR inurl:account OR inurl:profile OR inurl:verification OR inurl:kyc)
+  - id: Q028
+    category: documents
+    name: Documents and reports
+    priority: medium
+    enabled: true
+    query: >
+      ("{domain}" OR site:{domain}) (filetype:pdf OR filetype:doc OR filetype:docx OR filetype:xls OR filetype:xlsx OR filetype:csv)
+  - id: Q029
+    category: external_evidence
+    name: High-efficiency external evidence search
+    priority: critical
+    enabled: true
+    query: >
+      "{domain}" -site:{domain} ("deposit" OR "withdrawal" OR "wallet" OR "UPI" OR "payment proof" OR "withdrawal pending" OR "deposit not credited" OR "complaint")
+    evidence_keywords:
+      - deposit
+      - withdrawal
+      - wallet
+      - UPI
+      - payment proof
+      - withdrawal pending
+      - deposit not credited
+      - complaint
+  - id: Q030
+    category: external_evidence
+    name: Master evidence search
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR site:{domain}) (("deposit" OR "withdrawal" OR "wallet" OR "cash out") ("UPI" OR "bank transfer" OR "payment" OR "money" OR "balance")) OR ("{domain}" ("betting" OR "casino" OR "complaint" OR "payment proof"))
+  - id: Q031
+    category: documents
+    name: All PDFs related to the domain
+    priority: medium
+    enabled: true
+    query: '"{domain}" filetype:pdf'
+  - id: Q032
+    category: documents
+    name: PDFs hosted directly on the domain
+    priority: medium
+    enabled: true
+    query: 'site:{domain} filetype:pdf'
+  - id: Q033
+    category: documents
+    name: External PDFs mentioning the domain
+    priority: critical
+    enabled: true
+    query: '"{domain}" -site:{domain} filetype:pdf'
+  - id: Q034
+    category: documents
+    name: PDFs related to application or brand
+    priority: medium
+    enabled: true
+    query: '("{brand}" OR "{brand} India" OR "{brand} app") filetype:pdf'
+  - id: Q035
+    category: certificates_licences
+    name: Certificates and licences
+    priority: critical
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("certificate" OR "certification" OR "licence" OR "license" OR "licensed by" OR "registration certificate")
+  - id: Q036
+    category: certificates_licences
+    name: Gambling licence information
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("gaming licence" OR "gambling licence" OR "remote gaming licence" OR "operator licence" OR "regulatory certificate")
+  - id: Q037
+    category: legal_operator
+    name: Company registration documents
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("company registration" OR "certificate of incorporation" OR "registered company" OR "company number" OR "registered office" OR "beneficial owner")
+  - id: Q038
+    category: documents
+    name: Terms policies and agreements in PDF
+    priority: medium
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("terms and conditions" OR "privacy policy" OR "withdrawal policy" OR "deposit policy" OR "payment policy" OR "bonus terms")
+  - id: Q039
+    category: documents
+    name: Financial and payment-related PDFs
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("deposit" OR "withdrawal" OR "wallet" OR "UPI" OR "bank transfer" OR "payment method" OR "payout")
+  - id: Q040
+    category: regulatory
+    name: Regulatory or government documents
+    priority: critical
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf (site:gov.in OR site:gov OR site:org) ("gambling" OR "betting" OR "licence" OR "notice" OR "warning" OR "order")
+  - id: Q041
+    category: legal_notices
+    name: Court orders and legal notices
+    priority: critical
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("court order" OR "legal notice" OR "blocking order" OR "government notice" OR "regulatory action" OR "investigation")
+  - id: Q042
+    category: legal_notices
+    name: Domain-blocking documents
+    priority: critical
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("blocked website" OR "domain blocking" OR "blocking direction" OR "prohibited website" OR "illegal betting" OR "unauthorised gambling")
+  - id: Q043
+    category: security_reports
+    name: Fraud and cybersecurity reports
+    priority: critical
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("fraud report" OR "scam report" OR "threat report" OR "malware analysis" OR "phishing" OR "cybercrime" OR "security advisory")
+  - id: Q044
+    category: applications
+    name: Mobile application reports
+    priority: high
+    enabled: true
+    query: >
+      ("{brand}" OR "{domain}") filetype:pdf ("Android application" OR "mobile application" OR "APK" OR "application analysis" OR "security analysis" OR "privacy analysis")
+  - id: Q045
+    category: payment_proof
+    name: PDF reports containing payment evidence
+    priority: critical
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") filetype:pdf ("payment proof" OR "withdrawal proof" OR "deposit proof" OR "transaction" OR "money flow" OR "bank account" OR "UPI ID")
+  - id: Q046
+    category: documents
+    name: Other document formats
+    priority: medium
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}") (filetype:doc OR filetype:docx OR filetype:xls OR filetype:xlsx OR filetype:csv OR filetype:txt)
+  - id: Q047
+    category: certificates_licences
+    name: SSL and TLS certificate information
+    priority: medium
+    enabled: true
+    query: >
+      "{domain}" ("SSL certificate" OR "TLS certificate" OR "certificate transparency" OR "certificate issuer" OR "issued by" OR "certificate validity")
+  - id: Q048
+    category: certificate_transparency
+    name: Certificate Transparency results
+    priority: critical
+    enabled: true
+    query: 'site:crt.sh "{domain}"'
+    evidence_keywords:
+      - certificate transparency
+      - DNS names
+      - subject alternative name
+  - id: Q049
+    category: certificate_transparency
+    name: Certificate-related subdomains
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR "*.{domain}") ("crt.sh" OR "certificate transparency" OR "DNS names" OR "subject alternative name")
+  - id: Q050
+    category: documents
+    name: Master PDF and certificate command
+    priority: high
+    enabled: true
+    query: >
+      ("{domain}" OR "{brand}" OR "{brand} India" OR "{brand} app") filetype:pdf
+      ("certificate" OR "licence" OR "license" OR "registration" OR "incorporation" OR "gambling" OR "betting" OR "deposit" OR "withdrawal" OR "payment" OR "wallet" OR "legal notice" OR "blocking order" OR "fraud report" OR "application analysis")

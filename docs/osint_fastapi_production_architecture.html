@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Production-Ready OSINT Service with FastAPI</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; line-height: 1.45; font-size: 11pt; }
+    h1 { color: #17365d; font-size: 24pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 16pt; margin-top: 20pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    h3 { color: #2f5597; font-size: 12pt; margin-top: 14pt; }
+    .subtitle { color: #5b6573; font-size: 12pt; margin-bottom: 22pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .recommendation { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    pre { background: #f3f4f6; border: 1px solid #d1d5db; padding: 10pt; font-family: "Courier New", monospace; font-size: 9pt; white-space: pre-wrap; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    tr:nth-child(even) td { background: #f7f9fb; }
+    li { margin-bottom: 5pt; }
+    .footer-note { color: #6b7280; font-size: 9pt; margin-top: 24pt; }
+  </style>
+</head>
+<body>
+  <h1>Production-Ready OSINT Service with FastAPI</h1>
+  <p class="subtitle">Architecture guidance for the Web Investigator OSINT component</p>
+
+  <div class="summary">
+    <strong>Executive summary.</strong> FastAPI is a strong choice for exposing the current OSINT component through a stable HTTP API. However, FastAPI alone does not make the system production-ready. The most important improvements are durable background job execution, PostgreSQL, security controls, durable evidence storage, and operational monitoring.
+  </div>
+
+  <h2>1. How FastAPI Works</h2>
+  <p>FastAPI maps HTTP routes to ordinary typed Python functions. For example:</p>
+  <pre>@app.post("/investigations")
+def create_investigation(request: InvestigationRequest):
+    ...</pre>
+  <p>When a client sends JSON to this route, FastAPI:</p>
+  <ol>
+    <li>Routes the request to the correct Python function.</li>
+    <li>Validates and converts the request using Pydantic models.</li>
+    <li>Calls the application's service code.</li>
+    <li>Serializes the returned value as JSON.</li>
+    <li>Generates OpenAPI documentation, Swagger UI, and ReDoc automatically.</li>
+  </ol>
+  <p>FastAPI also provides dependency injection for authentication, database sessions, authorization, and shared services. It should be a thin HTTP layer around the existing collectors and orchestrator, rather than a replacement for them.</p>
+
+  <h2>2. How FastAPI Fits the Current Project</h2>
+  <p>The current implementation is a synchronous service workflow:</p>
+  <pre>Streamlit UI
+    |
+    v
+IntelligenceOrchestrator.run()
+    |
+    v
+Collectors running in parallel threads
+    |
+    v
+Domain checks -> source crawling -> evidence capture -> risk scoring
+    |
+    v
+SQLite repository</pre>
+  <p>A recommended production architecture is:</p>
+  <pre>Streamlit / Web UI / API client
+              |
+              | HTTP
+              v
+           FastAPI
+              |
+              | enqueue durable job
+              v
+      Redis or RabbitMQ queue
+              |
+              v
+        OSINT worker process(es)
+              |
+              +---------------------+
+              v                     v
+          PostgreSQL       Evidence/Object Storage</pre>
+  <p>This separates quick HTTP request handling from long-running collection and browser automation.</p>
+
+  <h2>3. Recommended API Contract</h2>
+  <table>
+    <tr><th>Method and route</th><th>Purpose</th></tr>
+    <tr><td><code>POST /v1/investigations</code></td><td>Validate the target, create a job, enqueue it, and return HTTP 202 Accepted.</td></tr>
+    <tr><td><code>GET /v1/investigations/{id}</code></td><td>Return job status, timestamps, progress, and failure information.</td></tr>
+    <tr><td><code>GET /v1/investigations/{id}/results</code></td><td>Return observations, sources, evidence, and risk assessment.</td></tr>
+    <tr><td><code>GET /v1/investigations/{id}/report</code></td><td>Download a generated investigation report.</td></tr>
+    <tr><td><code>POST /v1/investigations/{id}/cancel</code></td><td>Request cancellation of queued or running work.</td></tr>
+    <tr><td><code>GET /health/live</code></td><td>Confirm that the API process is alive.</td></tr>
+    <tr><td><code>GET /health/ready</code></td><td>Confirm that required dependencies are available.</td></tr>
+  </table>
+  <p>The create endpoint should return immediately:</p>
+  <pre>{
+  "investigation_id": "OSINT_ABC123",
+  "status": "QUEUED"
+}</pre>
+  <p>The client can poll the status route or receive progress through server-sent events or WebSockets.</p>
+
+  <h2>4. Why the Investigation Should Use a Job Worker</h2>
+  <p>The current <code>run()</code> workflow performs network requests, launches concurrent collectors, crawls sources, invokes Playwright, captures evidence, and writes many database records. It can take much longer than a normal HTTP request and should not run directly in the API request process.</p>
+  <p>FastAPI's in-process background tasks are appropriate for small operations. For this workflow, use a durable task system such as:</p>
+  <ul>
+    <li><strong>Celery</strong> with Redis or RabbitMQ;</li>
+    <li><strong>Dramatiq</strong> with Redis or RabbitMQ; or</li>
+    <li><strong>RQ</strong> with Redis for a simpler initial setup.</li>
+  </ul>
+  <p>A durable queue provides retry policies, task persistence, independent worker scaling, and recovery when the API process restarts. Merely converting the current method to <code>async def</code> will not make blocking libraries or browser work faster.</p>
+
+  <h2>5. Is This a Microservice?</h2>
+  <p>The current application is best described as a <strong>modular monolith</strong>. The Streamlit UI, orchestration, collectors, and storage use direct Python imports and share the same application runtime and database.</p>
+  <p>Adding FastAPI does not automatically make it a microservice. A microservice is primarily an independent deployment and ownership boundary, not a framework choice.</p>
+  <p>The component becomes an OSINT microservice when it is independently deployed and consumed through a stable API or message contract:</p>
+  <pre>Main application ---- HTTP ----> OSINT API
+                                  |-- dedicated workers
+                                  |-- independent deployment
+                                  `-- owned data and storage</pre>
+  <p>DNS, RDAP, search, certificate transparency, and web collectors should remain internal modules initially. Turning every collector into a network service would introduce unnecessary deployment, versioning, monitoring, and failure-handling complexity.</p>
+
+  <h2>6. Production-Readiness Checklist</h2>
+  <ol>
+    <li><strong>Durable job workers:</strong> Investigations must survive an API or worker process restart.</li>
+    <li><strong>PostgreSQL:</strong> Replace SQLite before running multiple API and worker processes that write concurrently.</li>
+    <li><strong>Explicit job lifecycle:</strong> Use states such as <code>QUEUED</code>, <code>RUNNING</code>, <code>COMPLETED</code>, <code>PARTIAL</code>, <code>FAILED</code>, and <code>CANCELLED</code>.</li>
+    <li><strong>Idempotency and retries:</strong> Retrying a stage must not duplicate observations or repeat completed expensive work unnecessarily.</li>
+    <li><strong>SSRF protection:</strong> Block loopback, private, link-local, cloud metadata, and internal network destinations; validate redirects and URL schemes.</li>
+    <li><strong>Authentication and authorization:</strong> Use API keys or OAuth/JWT, tenant-aware access checks, and audit logging.</li>
+    <li><strong>Resource controls:</strong> Limit concurrent jobs, redirects, pages, response sizes, downloads, browser time, and requests per user.</li>
+    <li><strong>Durable evidence storage:</strong> Store screenshots and reports in S3-compatible storage or an explicitly mounted persistent volume.</li>
+    <li><strong>Headless browser workers:</strong> Production server and container environments should run Playwright headlessly.</li>
+    <li><strong>Observability:</strong> Add structured logs with investigation IDs, metrics, tracing, health checks, and exception reporting.</li>
+    <li><strong>Database migrations:</strong> Replace runtime schema alterations with versioned migrations such as Alembic.</li>
+    <li><strong>Failure-path testing:</strong> Test authorization, validation, timeouts, queue failure, retries, cancellation, partial completion, and database concurrency.</li>
+  </ol>
+
+  <h2>7. Recommended Implementation Direction</h2>
+  <div class="recommendation">
+    Keep the collectors and orchestrator together as one independently deployable OSINT service. Add a thin FastAPI layer, execute investigations in dedicated worker processes, migrate persistence to PostgreSQL, and store evidence in durable object storage. This creates a clean production architecture without prematurely splitting the codebase into many small services.
+  </div>
+
+  <h2>8. Useful References</h2>
+  <ul>
+    <li>FastAPI features: https://fastapi.tiangolo.com/features/</li>
+    <li>FastAPI background tasks: https://fastapi.tiangolo.com/tutorial/background-tasks/</li>
+    <li>FastAPI concurrency guidance: https://fastapi.tiangolo.com/async/</li>
+    <li>FastAPI server workers: https://fastapi.tiangolo.com/deployment/server-workers/</li>
+  </ul>
+
+  <p class="footer-note">Prepared for the Web Investigator project. This document describes the recommended architecture; it does not indicate that the listed production controls have already been implemented.</p>
+</body>
+</html>

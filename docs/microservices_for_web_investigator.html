@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Microservices for the Web Investigator Project</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.45; }
+    h1 { color: #17365d; font-size: 24pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 16pt; margin-top: 20pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    h3 { color: #2f5597; font-size: 12.5pt; margin-top: 14pt; }
+    .subtitle { color: #5b6573; font-size: 12pt; margin-bottom: 22pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .recommendation { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    .warning { background: #fff2cc; border-left: 5px solid #bf9000; padding: 10pt 12pt; margin: 14pt 0; }
+    pre { background: #f3f4f6; border: 1px solid #d1d5db; padding: 10pt; font-family: "Courier New", monospace; font-size: 9pt; white-space: pre-wrap; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    tr:nth-child(even) td { background: #f7f9fb; }
+    li { margin-bottom: 5pt; }
+    .footer-note { color: #6b7280; font-size: 9pt; margin-top: 24pt; }
+  </style>
+</head>
+<body>
+  <h1>Microservices for the Web Investigator Project</h1>
+  <p class="subtitle">What a microservice means in this project, how it helps, and when to adopt it</p>
+
+  <div class="summary">
+    <strong>Definition.</strong> In this project, a microservice means turning one investigation capability into an independently running application with its own API, processing logic, deployment lifecycle, and data ownership. FastAPI can expose the service, but using FastAPI alone does not automatically make a component a microservice.
+  </div>
+
+  <h2>1. Current Architecture</h2>
+  <p>The project currently behaves mostly as one application:</p>
+  <pre>Streamlit UI
+    |
+    |-- Direct Python call --> OSINT orchestrator
+    |
+    `-- Direct Python call --> Dynamic Playwright engine
+                               |
+                               v
+                        Shared local storage</pre>
+  <p>The UI directly imports and calls both capabilities. This is a <strong>modular monolith</strong>: the Python modules are separated logically, but they run as parts of the same application.</p>
+
+  <h2>2. Proposed Microservice Architecture</h2>
+  <pre>                    Single Streamlit UI
+                             |
+                             v
+                    Investigation API
+                       / Coordinator
+                             |
+             +---------------+---------------+
+             |                               |
+             v                               v
+      OSINT Microservice            Dynamic Web Microservice
+      FastAPI application           FastAPI application
+             |                               |
+        OSINT worker                  Playwright worker
+             |                               |
+        OSINT database                Dynamic database</pre>
+  <p>Each service can run on a different network address, for example:</p>
+  <pre>OSINT API:     http://osint-service:8001
+Dynamic API:   http://dynamic-service:8002</pre>
+  <p>The UI or coordinator sends HTTP requests instead of directly importing the underlying Python implementation.</p>
+
+  <h2>3. OSINT Microservice</h2>
+  <p>The OSINT service would own:</p>
+  <ul>
+    <li>Target and brand resolution</li>
+    <li>DNS and RDAP collection</li>
+    <li>Search-provider collection</li>
+    <li>Certificate Transparency and Wayback discovery</li>
+    <li>Public-page intelligence and evidence</li>
+    <li>OSINT risk assessment and reports</li>
+  </ul>
+  <p>The existing OSINT orchestrator becomes internal business logic:</p>
+  <pre>HTTP request
+    |
+    v
+FastAPI OSINT endpoint
+    |
+    v
+Durable job queue
+    |
+    v
+OSINT worker
+    |
+    v
+IntelligenceOrchestrator
+    |
+    v
+OSINT database and evidence</pre>
+
+  <h2>4. Dynamic Web Investigation Microservice</h2>
+  <p>The Dynamic service would own:</p>
+  <ul>
+    <li>Playwright browser sessions</li>
+    <li>Website navigation and authentication workflows</li>
+    <li>Page crawling</li>
+    <li>Keyword and payment detection</li>
+    <li>Screenshots and image annotation</li>
+    <li>Dynamic investigation results</li>
+  </ul>
+  <pre>HTTP request
+    |
+    v
+FastAPI Dynamic endpoint
+    |
+    v
+Durable job queue
+    |
+    v
+Isolated browser worker
+    |
+    v
+Playwright investigation engine
+    |
+    v
+Dynamic database and screenshots</pre>
+
+  <h2>5. What Makes Them Real Microservices?</h2>
+  <p>The components become microservices when each one has:</p>
+  <ul>
+    <li>A stable and versioned API contract</li>
+    <li>Its own running process</li>
+    <li>Independent deployment and scaling</li>
+    <li>A clear, focused responsibility</li>
+    <li>Ownership of its own data</li>
+    <li>Failure isolation</li>
+    <li>No direct Python imports across service boundaries</li>
+  </ul>
+  <p>If both route groups are placed in one FastAPI process and deployed together, that is a structured API or modular monolith—not necessarily two microservices.</p>
+
+  <h2>6. How Microservices Help This Project</h2>
+  <h3>6.1 Independent scaling</h3>
+  <p>OSINT work is primarily network-bound, while Chromium browser investigations consume substantially more memory and CPU. The system could run two OSINT workers and eight browser workers without duplicating the whole UI.</p>
+
+  <h3>6.2 Browser security isolation</h3>
+  <p>The Dynamic component opens untrusted websites and executes their JavaScript. Separate containers allow dedicated CPU and memory limits, restricted networking, non-root execution, temporary filesystems, and short-lived browser sessions.</p>
+
+  <h3>6.3 Failure isolation</h3>
+  <p>If Chromium crashes, the Dynamic service may be temporarily affected while the OSINT service and UI remain available.</p>
+
+  <h3>6.4 Independent deployment</h3>
+  <p>OSINT collectors can be updated without redeploying browser workers, and Playwright can be upgraded independently of the OSINT service.</p>
+
+  <h3>6.5 One UI for all capabilities</h3>
+  <p>The analyst still sees one product with New Investigation, OSINT Results, Dynamic Analysis, Evidence, and Final Report. The microservice split remains an internal implementation detail.</p>
+
+  <h3>6.6 Reusable APIs</h3>
+  <p>Streamlit, a case-management system, or a command-line client could use the same authorized OSINT and Dynamic APIs.</p>
+
+  <h3>6.7 Separate ownership and maintenance</h3>
+  <table>
+    <tr><th>Area</th><th>Responsibility</th></tr>
+    <tr><td>OSINT</td><td>Collectors, search, resolution, domain intelligence</td></tr>
+    <tr><td>Dynamic investigation</td><td>Playwright, navigation, payment detection, screenshots</td></tr>
+    <tr><td>Platform</td><td>Pipeline, authentication, deployment, monitoring</td></tr>
+  </table>
+
+  <h2>7. Example Complete Investigation</h2>
+  <pre>Input: ExampleBet
+
+1. UI creates CASE_123
+          |
+2. OSINT service resolves the target
+          |
+          |-- examplebet.com
+          |-- payments.examplebet.com
+          `-- examplebet-old.com
+          |
+3. Analyst approves domains for dynamic analysis
+          |
+4. Dynamic service investigates approved URLs
+          |
+          |-- visits pages
+          |-- detects payment indicators
+          `-- captures screenshots
+          |
+5. Pipeline combines both sets of evidence
+          |
+6. UI shows one report for CASE_123</pre>
+
+  <h2>8. Shared Case Identity and Data Ownership</h2>
+  <p>A top-level case should connect results without merging service ownership:</p>
+  <pre>CASE_2026_000123
+|-- OSINT investigation: OSINT_ABC123
+|-- Dynamic investigation: DYNAMIC_DEF456
+`-- Dynamic investigation: DYNAMIC_XYZ789</pre>
+  <table>
+    <tr><th>Service</th><th>Owned data</th></tr>
+    <tr><td>Case/Pipeline service</td><td>Case metadata, selected targets, pipeline status</td></tr>
+    <tr><td>OSINT service</td><td>Queries, collector runs, domains, OSINT observations</td></tr>
+    <tr><td>Dynamic service</td><td>Visited pages, navigation, keywords, payment findings</td></tr>
+    <tr><td>Object storage</td><td>Screenshots, documents, generated reports</td></tr>
+  </table>
+  <p>Services should exchange data through APIs or events rather than modifying each other's database tables.</p>
+
+  <h2>9. Costs and Trade-offs</h2>
+  <div class="warning">
+    Microservices are not automatically better. They introduce network failures, multiple deployments, service authentication, API versioning, queues, distributed logging, eventual consistency, more difficult debugging, and increased operational cost.
+  </div>
+  <p>If the project has one developer, low traffic, and one server, immediate separation may increase complexity without delivering enough benefit.</p>
+
+  <h2>10. Recommended Adoption Path</h2>
+  <ol>
+    <li><strong>Separate UI from business logic:</strong> keep one repository but define clean OSINT and Dynamic service interfaces.</li>
+    <li><strong>Add API and job boundaries:</strong> introduce FastAPI, request/response schemas, durable queues, and explicit job states.</li>
+    <li><strong>Separate the Dynamic service first:</strong> browser execution has the clearest scaling and security-isolation requirements.</li>
+    <li><strong>Separate the OSINT service when needed:</strong> do this when independent scaling, external API use, or independent deployment becomes valuable.</li>
+  </ol>
+
+  <div class="recommendation">
+    <strong>Recommendation.</strong> Prepare both capabilities as independently testable services, but split their deployments gradually. The strongest initial microservice boundary is the Dynamic Playwright service because it has substantially different resource and security requirements from passive OSINT.
+  </div>
+
+  <h2>11. Final Target Model</h2>
+  <pre>OSINT microservice
+    = public intelligence and target discovery
+
+Dynamic Investigation microservice
+    = isolated browser execution and page evidence
+
+Pipeline service
+    = case coordination and combined reporting
+
+Streamlit
+    = presentation only</pre>
+
+  <p class="footer-note">Prepared for the Web Investigator project. This document describes a possible future architecture and does not indicate that the microservice separation has already been implemented.</p>
+</body>
+</html>
