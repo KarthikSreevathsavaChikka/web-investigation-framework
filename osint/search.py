@@ -15,6 +15,7 @@ from xml.etree import ElementTree
 
 from config import DB_PATH
 from osint.models import SearchResult
+from osint.url_tools import normalize_result_url
 
 
 @dataclass(frozen=True)
@@ -55,13 +56,26 @@ class SearchProvider(ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class SearchProviderExecution:
+    """Auditable outcome of one provider participating in an aggregated query."""
+
+    query_id: str
+    provider: str
+    status: str
+    results: tuple[SearchResult, ...] = ()
+    error: str | None = None
+
+
 class AggregatingSearchProvider(SearchProvider):
     """Query every available provider and merge their distinct result URLs."""
 
     name = "aggregated"
 
-    def __init__(self, providers: list[SearchProvider]):
+    def __init__(self, providers: list[SearchProvider], *, name: str | None = None):
         self.providers = [provider for provider in providers if provider.available]
+        self.name = name or type(self).name
+        self._executions: dict[str, tuple[SearchProviderExecution, ...]] = {}
 
     @property
     def available(self) -> bool:
@@ -70,21 +84,53 @@ class AggregatingSearchProvider(SearchProvider):
     def search(self, query: str, *, query_id: str, count: int) -> list[SearchResult]:
         merged: list[SearchResult] = []
         seen: set[str] = set()
-        errors: list[str] = []
+        executions: list[SearchProviderExecution] = []
         for provider in self.providers:
             try:
                 results = provider.search(query, query_id=query_id, count=count)
             except Exception as exc:
-                errors.append(f"{provider.name}: {exc}")
+                executions.append(SearchProviderExecution(
+                    query_id=query_id,
+                    provider=provider.name,
+                    status="failed",
+                    error=str(exc),
+                ))
                 continue
+            executions.append(SearchProviderExecution(
+                query_id=query_id,
+                provider=provider.name,
+                status="completed",
+                results=tuple(results),
+            ))
             for result in results:
-                normalized = result.url.casefold().rstrip("/")
+                try:
+                    normalized = normalize_result_url(result.url)
+                except ValueError:
+                    continue
                 if normalized not in seen:
                     merged.append(result)
                     seen.add(normalized)
-        if not merged and errors:
+        self._executions[query_id] = tuple(executions)
+        errors = [f"{item.provider}: {item.error}" for item in executions if item.status == "failed"]
+        if executions and len(errors) == len(executions):
             raise RuntimeError("; ".join(errors))
         return merged
+
+    def execution_reports(self, query_id: str) -> tuple[SearchProviderExecution, ...]:
+        return self._executions.get(query_id, ())
+
+    def capabilities_for(self, provider_name: str) -> SearchProviderCapabilities:
+        provider = next((item for item in self.providers if item.name == provider_name), None)
+        return provider.capabilities if provider else self.capabilities
+
+
+def build_keyless_search_provider() -> AggregatingSearchProvider:
+    """Create the standard keyless provider group used across resolution and discovery."""
+
+    return AggregatingSearchProvider(
+        [BingRSSSearchProvider(), DuckDuckGoSearchProvider()],
+        name="keyless_aggregated",
+    )
 
 
 class BraveSearchProvider(SearchProvider):

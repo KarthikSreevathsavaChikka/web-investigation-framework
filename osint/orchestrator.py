@@ -139,7 +139,8 @@ class IntelligenceOrchestrator:
         try:
             observations = collector.collect(target, context)
             status = "PARTIAL" if any(
-                item.entity_type == "SEARCH_PROVIDER_MANUAL_REQUIRED" for item in observations
+                item.entity_type in {"SEARCH_PROVIDER_MANUAL_REQUIRED", "SEARCH_PROVIDER_ERROR"}
+                for item in observations
             ) else "COMPLETED"
             return CollectorResult(collector.name, status, observations, duration_seconds=time.monotonic() - started)
         except Exception as exc:

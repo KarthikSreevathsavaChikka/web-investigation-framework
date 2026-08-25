@@ -38,7 +38,7 @@ class OSINTReportBuilder:
         manual_links = [item for item in observations if item.get("entity_type") == "MANUAL_REVIEW_LINK"]
         report_observations = [
             item for item in observations
-            if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "ACCESS_STATUS", "CANDIDATE_DOMAIN"}
+            if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "SEARCH_PROVIDER_ERROR", "ACCESS_STATUS", "CANDIDATE_DOMAIN"}
             and not (
                 item.get("entity_type") in {"SEARCH_SNIPPET_EVIDENCE", "PUBLIC_PAGE_EVIDENCE"}
                 and item.get("target_keyword_distance") is None

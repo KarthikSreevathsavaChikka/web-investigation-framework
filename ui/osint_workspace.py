@@ -13,7 +13,7 @@ from osint.orchestrator import IntelligenceOrchestrator
 from osint.resolver import ResolutionProviderUnavailable, TargetResolver
 from osint.report import OSINTReportBuilder
 from osint.docx_report import OSINTDocxReportBuilder
-from osint.search import AggregatingSearchProvider, BingRSSSearchProvider, BraveSearchProvider, GoogleSearchProvider
+from osint.search import BraveSearchProvider, GoogleSearchProvider, build_keyless_search_provider
 from osint.storage import OSINTRepository
 from osint.domain_intelligence import DomainIntelligenceService
 
@@ -25,13 +25,7 @@ def render_osint_workspace() -> None:
     google_provider = GoogleSearchProvider()
     brave_provider = BraveSearchProvider()
     google_api_available = bool(google_provider.api_key and google_provider.cse_id)
-    resolution_providers = []
-    if google_api_available:
-        resolution_providers.append(google_provider)
-    if brave_provider.available:
-        resolution_providers.append(brave_provider)
-    resolution_providers.append(BingRSSSearchProvider())
-    search_provider = AggregatingSearchProvider(resolution_providers)
+    search_provider = build_keyless_search_provider()
 
     st.title(":material/travel_explore: Web intelligence and OSINT")
     st.caption(
@@ -193,7 +187,7 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
     observations = repository.get_observations(investigation_id)
     findings = [
         item for item in observations
-        if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "ACCESS_STATUS", "CANDIDATE_DOMAIN"}
+        if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "SEARCH_PROVIDER_ERROR", "ACCESS_STATUS", "CANDIDATE_DOMAIN"}
         and not (
             item.get("entity_type") in {"SEARCH_SNIPPET_EVIDENCE", "PUBLIC_PAGE_EVIDENCE"}
             and item.get("target_keyword_distance") is None

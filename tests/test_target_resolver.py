@@ -82,11 +82,36 @@ class TargetResolverTests(unittest.TestCase):
     def test_aggregates_distinct_domains_from_all_available_providers(self):
         first = StaticSearchProvider("first", [("ExampleBet", "https://examplebet.com", "Official")])
         second = StaticSearchProvider("second", [
-            ("ExampleBet", "https://examplebet.com", "Official"),
+            ("ExampleBet", "https://examplebet.com/?utm_source=second", "Official"),
             ("ExampleBet India", "https://examplebet-india.com", "Official betting"),
         ])
         results = AggregatingSearchProvider([first, second]).search("ExampleBet", query_id="R", count=20)
         self.assertEqual({item.url for item in results}, {"https://examplebet.com", "https://examplebet-india.com"})
+
+    def test_aggregator_records_each_provider_outcome_when_one_fails(self):
+        successful = StaticSearchProvider(
+            "successful",
+            [("ExampleBet", "https://examplebet.com", "Official")],
+        )
+        provider = AggregatingSearchProvider([successful, RateLimitedSearchProvider()])
+
+        results = provider.search("ExampleBet", query_id="R", count=20)
+        reports = provider.execution_reports("R")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            [(item.provider, item.status) for item in reports],
+            [("successful", "completed"), ("rate_limited", "failed")],
+        )
+        self.assertIn("rate-limited", reports[1].error)
+
+    def test_aggregator_distinguishes_all_failed_from_no_results(self):
+        provider = AggregatingSearchProvider([RateLimitedSearchProvider()])
+
+        with self.assertRaisesRegex(RuntimeError, "rate_limited"):
+            provider.search("ExampleBet", query_id="R", count=20)
+
+        self.assertEqual(provider.execution_reports("R")[0].status, "failed")
 
     def test_rejects_fuzzy_unrelated_domain_candidates(self):
         results = [

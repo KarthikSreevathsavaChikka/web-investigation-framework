@@ -11,13 +11,13 @@ from osint.evidence_capture import (
     group_evidence_positions,
     sanitize_path_component,
 )
-from osint.models import CollectorResult, EvidenceScreenshotRecord, Observation, PageCaptureRecord
+from osint.models import CollectorResult, DorkQuery, EvidenceScreenshotRecord, Observation, PageCaptureRecord, SearchResult
 from osint.normalizer import DomainNormalizer, TargetNormalizationError
 from osint.risk import RiskScorer
 from osint.storage import OSINTRepository
 from osint.documents import assess_pdf
 from core.playwright_session import close_browser_session, launch_browser_session
-from osint.search import BingRSSSearchProvider, DuckDuckGoSearchProvider, GoogleSearchProvider
+from osint.search import AggregatingSearchProvider, BingRSSSearchProvider, DuckDuckGoSearchProvider, GoogleSearchProvider, SearchProvider
 from osint.collectors.brave_search import KeylessSearchCollector
 from osint.collectors.base import CollectorContext
 from osint.collectors.free_discovery import CertificateTransparencyCollector, WaybackCDXCollector
@@ -227,6 +227,51 @@ class EvidenceCaptureTests(unittest.TestCase):
 
 
 class KeylessSearchProviderTests(unittest.TestCase):
+    def test_combined_collector_records_each_provider_and_partial_failure(self):
+        class StaticProvider(SearchProvider):
+            capabilities = BingRSSSearchProvider.capabilities
+
+            def __init__(self, name, *, fail=False):
+                self.name = name
+                self.fail = fail
+
+            @property
+            def available(self):
+                return True
+
+            def search(self, query, *, query_id, count):
+                if self.fail:
+                    raise RuntimeError("temporarily unavailable")
+                return [SearchResult(
+                    query_id,
+                    query,
+                    self.name,
+                    1,
+                    "Example official login",
+                    "https://example.com/login",
+                    "Example account login",
+                )]
+
+        provider = AggregatingSearchProvider([
+            StaticProvider("bing_rss"),
+            StaticProvider("duckduckgo", fail=True),
+        ], name="keyless_aggregated")
+        collector = KeylessSearchCollector(provider)
+        query = DorkQuery("Q001", "authentication", "Login", "high", '"example" login', "Login pages")
+
+        observations = collector.collect(
+            DomainNormalizer.normalize("example.com"),
+            CollectorContext([query], search_query_budget=1, results_per_query=5),
+        )
+
+        executions = [item for item in observations if item.entity_type == "QUERY_EXECUTION"]
+        self.assertEqual(
+            {(item.metadata["provider"], item.metadata["status"]) for item in executions},
+            {("bing_rss", "completed"), ("duckduckgo", "failed")},
+        )
+        self.assertTrue(any(item.entity_type == "SEARCH_PROVIDER_ERROR" for item in observations))
+        self.assertTrue(any(item.entity_type == "SEARCH_RESULT" for item in observations))
+
     @patch("osint.search.requests.get")
     def test_parses_google_brand_results(self, get):
         response = Mock()
