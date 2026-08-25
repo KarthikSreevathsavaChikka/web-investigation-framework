@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from config import DB_PATH
+from database.connection import connect_database, is_postgresql_connection
+from database.migrations import record_schema_version
 from osint.models import (
     CollectorResult,
     DorkQuery,
@@ -25,15 +25,12 @@ def utc_now() -> str:
 
 
 class OSINTRepository:
-    def __init__(self, db_path: Path | str = DB_PATH):
-        self.db_path = str(db_path)
+    def __init__(self, db_path: Path | str | None = None):
+        self.db_path = str(db_path) if db_path is not None else None
         self.init_schema()
 
     def connection(self):
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return connect_database(self.db_path)
 
     def init_schema(self) -> None:
         with self.connection() as connection:
@@ -300,9 +297,13 @@ class OSINTRepository:
                 ("traffic_data_date", "TEXT"),
             ):
                 self._ensure_column(connection, "osint_target_candidates", column, definition)
+            record_schema_version(connection, "osint", 1)
 
     @staticmethod
-    def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    def _ensure_column(connection, table: str, column: str, definition: str) -> None:
+        if is_postgresql_connection(connection):
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+            return
         existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
@@ -437,7 +438,7 @@ class OSINTRepository:
 
     @staticmethod
     def _save_query_execution(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
@@ -459,7 +460,7 @@ class OSINTRepository:
 
     @staticmethod
     def _save_search_result_audit(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
@@ -487,7 +488,7 @@ class OSINTRepository:
 
     @staticmethod
     def _save_search_source(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
@@ -539,7 +540,7 @@ class OSINTRepository:
 
     @staticmethod
     def _save_document(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:

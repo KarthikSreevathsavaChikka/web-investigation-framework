@@ -4,7 +4,6 @@ import os
 import time
 import hashlib
 import json
-import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -13,7 +12,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 from xml.etree import ElementTree
 
-from config import DB_PATH
+from database.connection import connect_database
 from osint.models import SearchResult
 from osint.url_tools import normalize_result_url
 
@@ -189,7 +188,7 @@ class BraveSearchProvider(SearchProvider):
 
     @staticmethod
     def _init_cache() -> None:
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS osint_search_cache (
                     cache_key TEXT PRIMARY KEY, provider TEXT NOT NULL,
@@ -200,7 +199,7 @@ class BraveSearchProvider(SearchProvider):
     def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
         if not self.cache_ttl:
             return None
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             row = connection.execute(
                 "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
                 (self._cache_key(query, count),),
@@ -216,7 +215,7 @@ class BraveSearchProvider(SearchProvider):
             "search_engine": item.search_engine, "rank": item.rank, "title": item.title,
             "url": item.url, "snippet": item.snippet,
         } for item in results]
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO osint_search_cache (cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),
@@ -329,7 +328,7 @@ class GoogleSearchProvider(SearchProvider):
     def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
         if not self.cache_ttl:
             return None
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             row = connection.execute(
                 "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
                 (self._cache_key(query, count),),
@@ -338,7 +337,7 @@ class GoogleSearchProvider(SearchProvider):
             return None
         payload = json.loads(row[0])
         if not payload:
-            with sqlite3.connect(str(DB_PATH)) as connection:
+            with connect_database() as connection:
                 connection.execute("DELETE FROM osint_search_cache WHERE cache_key = ?", (self._cache_key(query, count),))
             return None
         return [SearchResult(query_id=query_id, query_text=query, **item) for item in payload]
@@ -350,7 +349,7 @@ class GoogleSearchProvider(SearchProvider):
             "search_engine": item.search_engine, "rank": item.rank, "title": item.title,
             "url": item.url, "snippet": item.snippet,
         } for item in results]
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO osint_search_cache (cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),
@@ -427,7 +426,7 @@ class DuckDuckGoSearchProvider(SearchProvider):
     def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
         if not self.cache_ttl:
             return None
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             row = connection.execute(
                 "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
                 (self._cache_key(query, count),),
@@ -446,7 +445,7 @@ class DuckDuckGoSearchProvider(SearchProvider):
             }
             for item in results
         ]
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO osint_search_cache (cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),

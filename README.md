@@ -23,7 +23,7 @@ The OSINT workspace currently provides:
 - DOM-safe keyword highlighting and bounded Playwright viewport screenshots
 - Screenshot SHA-256 provenance, surrounding text, source rank, and query linkage
 - Evidence gallery and self-contained evidence screenshots in HTML reports
-- Structured SQLite persistence with evidence hashes
+- Structured PostgreSQL persistence with evidence hashes (SQLite remains available for isolated tests)
 - Explainable risk scoring and collector status reporting
 - Downloadable, source-traceable HTML report
 - Safe HTTPS/HTTP domain availability checks for resolved and related domains, with redirect validation
@@ -76,6 +76,33 @@ Run the application:
 ```bash
 .venv/bin/streamlit run app.py
 ```
+
+## Run the complete framework with Docker
+
+Docker Compose runs the Streamlit application and a fresh PostgreSQL 16 database. It does not read or modify the SQLite database in the original `Web-Investigator` repository.
+
+The `schema_migrations` table tracks schema version 1 independently for the Dynamic Investigation and OSINT components.
+
+```bash
+cp .env.example .env
+# Change POSTGRES_PASSWORD in .env, then start everything:
+docker compose up --build -d
+```
+
+Open <http://localhost:8501>. Check status and logs with:
+
+```bash
+docker compose ps
+docker compose logs -f app
+```
+
+Stop the containers without deleting PostgreSQL data:
+
+```bash
+docker compose down
+```
+
+The named `postgres_data` volume persists database records. Do not run `docker compose down -v` unless you intentionally want to delete the fresh PostgreSQL data.
 
 Run the OSINT and evidence-capture tests:
 

@@ -17,7 +17,7 @@ DB_PATH = DATA_DIR / "evidence.db"
 # Crawler Parameters
 DEFAULT_MAX_PAGES = 15
 DEFAULT_RENDER_TIMEOUT = 30000  # ms for Playwright (30 seconds for heavy gaming portals)
-HEADLESS = False  # Headed mode for visible browser & manual auth
+HEADLESS = os.getenv("HEADLESS", "false").lower() in {"1", "true", "yes"}
 
 # Priority Navigation Lists
 HIGH_PRIORITY_KEYWORDS = [

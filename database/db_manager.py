@@ -1,21 +1,19 @@
-import sqlite3
 import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
-from config import DB_PATH
+from database.connection import connect_database
+from database.migrations import record_schema_version
 
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    def __init__(self, db_path=DB_PATH):
-        self.db_path = str(db_path)
+    def __init__(self, db_path=None):
+        self.db_path = str(db_path) if db_path is not None else None
         self.init_db()
 
     def get_connection(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_database(self.db_path)
 
     def init_db(self):
         """Creates the 7 required database tables if they do not exist."""
@@ -109,6 +107,7 @@ class DatabaseManager:
                 )
             """)
 
+            record_schema_version(conn, "dynamic_investigation", 1)
             conn.commit()
 
     # --- Investigation Operations ---
@@ -133,7 +132,7 @@ class DatabaseManager:
                 SET investigation_status = ?, end_time = ?, duration = ?, 
                     total_pages = ?, login_required = ?
                 WHERE id = ?
-            """, (status, end_time, duration, total_pages, 1 if login_required else 0, investigation_id))
+            """, (status, end_time, duration, total_pages, login_required, investigation_id))
             conn.commit()
 
     # --- Page Operations ---
