@@ -995,7 +995,8 @@ class OSINTRepository:
                 LEFT JOIN osint_evidence_matches e ON e.page_capture_id = p.id AND e.query_id = m.query_id
                 LEFT JOIN osint_evidence_screenshots shot ON shot.evidence_match_id = e.id
                 WHERE s.investigation_id = ? AND m.query_id = ?
-                GROUP BY m.id
+                GROUP BY m.id, m.search_rank, s.id, s.title, s.source_url,
+                         s.source_type, p.accessibility_status
                 ORDER BY m.search_rank, s.id
                 """,
                 (investigation_id, query_id),
