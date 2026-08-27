@@ -2,7 +2,12 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from services.api.dependencies import get_dynamic_repository, get_osint_repository
+from services.api.dependencies import (
+    get_dynamic_repository,
+    get_job_queue,
+    get_job_repository,
+    get_osint_repository,
+)
 from services.api.main import app
 
 
@@ -35,11 +40,49 @@ class FakeOSINTRepository:
         return {"configured_queries": 50, "pages_visited": 8}
 
 
+class FakeJobRepository:
+    def __init__(self):
+        self.jobs = {}
+
+    def create(self, component, target, payload):
+        job = {
+            "id": "JOB_1", "component": component, "target": target,
+            "status": "QUEUED", "attempts": 0,
+            "created_at": "2026-08-27T12:00:00+00:00",
+            "started_at": None, "completed_at": None,
+            "result": {}, "error": None, "payload": payload,
+        }
+        self.jobs[job["id"]] = job
+        return job
+
+    def get(self, job_id):
+        return self.jobs.get(job_id)
+
+    def list(self, limit=50):
+        return list(self.jobs.values())[:limit]
+
+    def mark_failed(self, job_id, error):
+        self.jobs[job_id]["status"] = "FAILED"
+        self.jobs[job_id]["error"] = error
+
+
+class FakeJobQueue:
+    def __init__(self):
+        self.enqueued = []
+
+    def enqueue(self, job_id):
+        self.enqueued.append(job_id)
+
+
 class APITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.jobs = FakeJobRepository()
+        cls.queue = FakeJobQueue()
         app.dependency_overrides[get_dynamic_repository] = FakeDynamicRepository
         app.dependency_overrides[get_osint_repository] = FakeOSINTRepository
+        app.dependency_overrides[get_job_repository] = lambda: cls.jobs
+        app.dependency_overrides[get_job_queue] = lambda: cls.queue
         cls.client = TestClient(app)
 
     @classmethod
@@ -64,6 +107,24 @@ class APITests(unittest.TestCase):
         self.assertEqual(response.json()["summary"]["pages_visited"], 8)
         missing = self.client.get("/api/v1/investigations/dynamic/missing")
         self.assertEqual(missing.status_code, 404)
+
+    def test_creates_and_reads_osint_job(self):
+        response = self.client.post("/api/v1/jobs/osint", json={
+            "target": "example.org",
+            "collectors": ["DNS", "RDAP"],
+            "brand": "Example",
+            "authorized": True,
+        })
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "QUEUED")
+        self.assertEqual(self.queue.enqueued, ["JOB_1"])
+        self.assertEqual(self.client.get("/api/v1/jobs/JOB_1").status_code, 200)
+
+    def test_rejects_unconfirmed_authorization(self):
+        response = self.client.post("/api/v1/jobs/dynamic", json={
+            "target": "https://example.com", "max_pages": 5, "authorized": False,
+        })
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

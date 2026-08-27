@@ -104,7 +104,17 @@ curl http://localhost:8000/api/v1/investigations
 curl "http://localhost:8000/api/v1/investigations?component=osint"
 ```
 
-This initial API slice is read-only. Long-running Playwright and OSINT jobs remain in the existing application until an asynchronous worker/queue service is introduced; they are intentionally not executed inside API request processes.
+Long-running Playwright and OSINT investigations can now be submitted to FastAPI and executed by the separate worker through Redis. PostgreSQL keeps durable job status while Redis transports queued job IDs.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/jobs/osint \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"example.com","collectors":["DNS","RDAP","Public website"],"brand":"Example","authorized":true}'
+
+curl http://localhost:8000/api/v1/jobs/JOB_ID_FROM_RESPONSE
+```
+
+The dynamic endpoint is `POST /api/v1/jobs/dynamic`. Interactive login credentials are intentionally not accepted by the queue API; use the existing Streamlit flow when manual authentication is required.
 
 Stop the containers without deleting PostgreSQL data:
 
@@ -112,7 +122,7 @@ Stop the containers without deleting PostgreSQL data:
 docker compose down
 ```
 
-The named `postgres_data` volume persists database records. Do not run `docker compose down -v` unless you intentionally want to delete the fresh PostgreSQL data.
+The named `postgres_data` and `redis_data` volumes persist database records and queued work. Do not run `docker compose down -v` unless you intentionally want to delete that fresh data.
 
 Run the OSINT and evidence-capture tests:
 

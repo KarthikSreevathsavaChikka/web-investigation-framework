@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from services.api.routers import health, investigations
+from services.api.routers import health, investigations, jobs
 
 app = FastAPI(
     title="Web Investigation Framework API",
@@ -9,6 +9,7 @@ app = FastAPI(
 )
 app.include_router(health.router)
 app.include_router(investigations.router)
+app.include_router(jobs.router)
 
 
 @app.get("/", include_in_schema=False)
