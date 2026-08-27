@@ -41,6 +41,23 @@ class DatabaseConnectionTests(unittest.TestCase):
         translated = PostgresCursor._translate("id INTEGER PRIMARY KEY AUTOINCREMENT")
         self.assertEqual(translated, "id BIGSERIAL PRIMARY KEY")
 
+    def test_replace_names_postgresql_conflict_key(self):
+        translated = PostgresCursor._translate(
+            "INSERT OR REPLACE INTO osint_search_cache "
+            "(cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)"
+        )
+        self.assertIn("ON CONFLICT (cache_key) DO UPDATE SET", translated)
+
+    def test_replace_uses_composite_conflict_key(self):
+        translated = PostgresCursor._translate(
+            "INSERT OR REPLACE INTO osint_query_executions "
+            "(investigation_id, query_id, provider) VALUES (?, ?, ?)"
+        )
+        self.assertIn(
+            "ON CONFLICT (investigation_id, query_id, provider) DO UPDATE SET",
+            translated,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

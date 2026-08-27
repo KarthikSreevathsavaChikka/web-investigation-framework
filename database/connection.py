@@ -58,11 +58,24 @@ class PostgresCursor:
         if ignore:
             sql = f"{sql.rstrip().rstrip(';')} ON CONFLICT DO NOTHING"
         elif replace:
-            match = re.search(r"INSERT\s+INTO\s+[^()]+\(([^)]+)\)", sql, re.I | re.S)
+            match = re.search(r"INSERT\s+INTO\s+([a-zA-Z_][\w]*)\s*\(([^)]+)\)", sql, re.I | re.S)
             if match:
-                columns = [item.strip() for item in match.group(1).split(",")]
+                table = match.group(1).lower()
+                columns = [item.strip() for item in match.group(2).split(",")]
+                conflict_columns = {
+                    "osint_search_cache": ("cache_key",),
+                    "osint_target_candidates": ("investigation_id", "domain"),
+                    "osint_query_executions": ("investigation_id", "query_id", "provider"),
+                    "osint_domain_traffic_cache": ("domain",),
+                }.get(table)
+                if not conflict_columns:
+                    raise ValueError(f"No PostgreSQL conflict key configured for upsert table: {table}")
                 updates = ", ".join(f"{item} = EXCLUDED.{item}" for item in columns)
-                sql = f"{sql.rstrip().rstrip(';')} ON CONFLICT DO UPDATE SET {updates}"
+                conflict_target = ", ".join(conflict_columns)
+                sql = (
+                    f"{sql.rstrip().rstrip(';')} ON CONFLICT ({conflict_target}) "
+                    f"DO UPDATE SET {updates}"
+                )
         return sql
 
     def execute(self, sql: str, parameters=()):
@@ -109,6 +122,10 @@ class PostgresConnection:
 
     def execute(self, sql: str, parameters=()) -> PostgresCursor:
         return self.cursor().execute(sql, parameters)
+
+    def executemany(self, sql: str, parameter_sets) -> None:
+        for parameters in parameter_sets:
+            self.execute(sql, parameters)
 
     def executescript(self, script: str) -> None:
         for statement in script.split(";"):
