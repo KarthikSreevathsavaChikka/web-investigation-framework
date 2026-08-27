@@ -158,6 +158,12 @@ class RepositoryTests(unittest.TestCase):
 
 
 class EvidenceCaptureTests(unittest.TestCase):
+    def test_every_query_includes_gambling_evidence_vocabulary(self):
+        queries = DorkGenerator().generate(DomainNormalizer.normalize("example.com"))
+        for query in queries:
+            keywords = {item.casefold() for item in query.evidence_keywords}
+            self.assertTrue({"betting", "gambling", "casino", "sportsbook", "wagering"}.issubset(keywords))
+
     def test_groups_nearby_matches_and_sanitizes_paths(self):
         groups = group_evidence_positions([{"documentY": 20}, {"documentY": 200}, {"documentY": 900}])
         self.assertEqual([len(group) for group in groups], [2, 1])

@@ -249,7 +249,7 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
         st.metric("Results reviewed", raw_results, border=True, help="All URLs returned by the enabled public search providers before relevance filtering.")
         st.metric("Target-related sources", target_sources, border=True, help="Deduplicated URLs that passed the strict target-identity relevance check.")
         st.metric("Pages checked", pages_checked, border=True, help="Target-related source URLs opened for page-level evidence checking.")
-        st.metric("Evidence captures", evidence_captures, border=True, help="Highlighted, target-specific evidence screenshots captured from public pages or documents.")
+        st.metric("Screenshots", evidence_captures, border=True, help="Confirmed evidence screenshots and target-presence baseline captures from accessible public pages.")
 
     overview_tab, resolution_tab, findings_tab, evidence_tab, search_tab, sources_tab, documents_tab, collectors_tab, risk_tab, notes_tab = st.tabs(
         ["Overview", "Resolution", "Findings", "Evidence captures", "Search queries", "Sources", "Documents", "Collector status", "Risk analysis", "Analyst notes"]
@@ -275,7 +275,7 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
 - **Results reviewed**: URLs returned by search before filtering.
 - **Target-related sources**: URLs mentioning the resolved target identity that passed relevance rules.
 - **Pages checked**: accepted source URLs opened for evidence extraction.
-- **Evidence captures**: screenshots with the target and a relevant investigation term close together."""
+- **Evidence captures**: confirmed target-plus-evidence matches and clearly labelled target-presence baseline screenshots."""
             )
 
     with findings_tab:
@@ -323,7 +323,7 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
         status_counts = pd.DataFrame(page_captures)["accessibility_status"].value_counts() if page_captures else {}
         evidence_columns = st.columns(4)
         evidence_columns[0].metric("Pages attempted", len(page_captures), border=True)
-        evidence_columns[1].metric("Evidence screenshots", len(evidence), border=True)
+        evidence_columns[1].metric("Screenshots", len(evidence), border=True)
         evidence_columns[2].metric("Manual review", int(status_counts.get("manual_required", 0)), border=True)
         evidence_columns[3].metric("Failed", int(status_counts.get("failed", 0)), border=True)
         if evidence:
@@ -377,12 +377,12 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
                     st.write(item["context_text"] or item["evidence_text"])
                     st.link_button(":material/open_in_new: Open source", item["source_url"])
         elif page_captures:
-            st.info("Pages were visited, but no configured evidence keywords were found.")
+            st.info("Pages were visited, but no confirmed evidence or baseline screenshots were captured.")
             st.dataframe(pd.DataFrame(page_captures), hide_index=True)
         else:
                 st.info("No SERP-backed pages were available for browser evidence capture.")
         non_evidence_captures = [
-            item for item in page_captures if item["accessibility_status"] != "evidence_found"
+            item for item in page_captures if item["accessibility_status"] not in {"evidence_found", "baseline_captured"}
         ]
         if non_evidence_captures:
             with st.expander("No evidence, manual review, and failed pages"):

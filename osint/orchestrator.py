@@ -111,7 +111,7 @@ class IntelligenceOrchestrator:
                 )
                 self.repository.save_page_captures(investigation_id, captures)
                 capture_status = "COMPLETED" if any(
-                    item.accessibility_status in {"evidence_found", "no_evidence"} for item in captures
+                    item.accessibility_status in {"evidence_found", "baseline_captured", "no_evidence"} for item in captures
                 ) else "PARTIAL"
                 capture_error = None
             except Exception as exc:

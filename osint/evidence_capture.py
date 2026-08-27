@@ -265,7 +265,56 @@ class SERPEvidenceCapturePipeline:
                                 target_keyword_distance=proximity[2],
                             )
                         )
-                record.accessibility_status = "evidence_found" if record.screenshots else "no_evidence"
+                if record.screenshots:
+                    record.accessibility_status = "evidence_found"
+                else:
+                    query = min(task["queries"], key=lambda item: item.get("search_rank", 999999))
+                    target_matches = await self.highlight_page(page, list(target_variants))
+                    if target_matches:
+                        first = target_matches[0]
+                        mark = page.locator('mark[data-osint-evidence="true"]').nth(first["index"])
+                        await mark.scroll_into_view_if_needed()
+                        await mark.evaluate(
+                            "el => el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'})"
+                        )
+                        await page.wait_for_timeout(350)
+                    screenshot_path = self._screenshot_path(
+                        investigation_id,
+                        target_domain,
+                        "TARGET_BASELINE",
+                        query.get("search_rank", 0),
+                        hostname,
+                        1,
+                    )
+                    screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    screenshot_bytes = await page.screenshot(path=str(screenshot_path), full_page=False)
+                    matched_targets = sorted(
+                        {item["matchedText"] for item in target_matches if item.get("matchedText")},
+                        key=str.casefold,
+                    )
+                    contexts = list(dict.fromkeys(item["context"] for item in target_matches if item.get("context")))
+                    record.screenshots.append(
+                        EvidenceScreenshotRecord(
+                            query_id="TARGET_BASELINE",
+                            query_name="Target-presence baseline",
+                            query_category="target_identity",
+                            search_engine=query.get("search_engine", "unknown"),
+                            serp_rank=query.get("search_rank", 0),
+                            matched_keywords=matched_targets,
+                            matched_phrases=[item for item in matched_targets if " " in item],
+                            evidence_text=(
+                                " | ".join(matched_targets)
+                                or "Target-relevant page baseline; no visible target term was highlightable."
+                            ),
+                            context_text=clean_evidence_text("\n\n".join(contexts)),
+                            match_method="target_only_baseline" if matched_targets else "page_baseline",
+                            screenshot_path=str(screenshot_path),
+                            screenshot_sha256=hashlib.sha256(screenshot_bytes).hexdigest(),
+                            confidence=0.70 if matched_targets else 0.55,
+                            matched_target_variant=page_relevance.matched_variant,
+                        )
+                    )
+                    record.accessibility_status = "baseline_captured"
                 return record
             except Exception as exc:
                 record.accessibility_status = "failed"

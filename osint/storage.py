@@ -853,6 +853,7 @@ class OSINTRepository:
                     )
                 lifecycle_status = {
                     "evidence_found": "confirmed_evidence",
+                    "baseline_captured": "target_baseline",
                     "no_evidence": "no_evidence",
                     "manual_required": "manual_required",
                     "rejected_irrelevant": "rejected_irrelevant",

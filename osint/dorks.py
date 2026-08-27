@@ -31,6 +31,13 @@ class DorkGenerator:
     }
 
     PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    GAMBLING_EVIDENCE_KEYWORDS = (
+        "bet", "betting", "sports betting", "sportsbook", "bookmaker", "wager", "wagering",
+        "odds", "stake", "bet slip", "in-play betting", "cash betting", "real money",
+        "gambling", "gaming", "casino", "online casino", "live casino", "slot", "slots",
+        "jackpot", "roulette", "baccarat", "blackjack", "poker", "teen patti", "andar bahar",
+        "aviator", "crash game", "lottery", "winnings", "payout", "bonus", "free bet",
+    )
 
     def __init__(self, config_path: Path | str | None = None):
         self.config_path = Path(config_path or BASE_DIR / "config" / "search_queries.yaml")
@@ -73,6 +80,7 @@ class DorkGenerator:
             except KeyError as exc:
                 raise QueryConfigurationError(f"Unknown placeholder in {entry['id']}: {exc}") from exc
             configured_keywords = entry.get("evidence_keywords") or self._derive_keywords(str(entry["query"]))
+            configured_keywords = list(configured_keywords) + list(self.GAMBLING_EVIDENCE_KEYWORDS)
             queries.append(
                 DorkQuery(
                     query_id=str(entry["id"]),
