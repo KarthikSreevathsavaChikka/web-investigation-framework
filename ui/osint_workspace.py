@@ -15,7 +15,7 @@ from osint.report import OSINTReportBuilder
 from osint.docx_report import OSINTDocxReportBuilder
 from osint.search import BraveSearchProvider, GoogleSearchProvider, build_keyless_search_provider
 from osint.storage import OSINTRepository
-from osint.domain_intelligence import DomainIntelligenceService
+from osint.domain_intelligence import DomainIntelligenceService, http_status_meaning
 
 
 def render_osint_workspace() -> None:
@@ -434,14 +434,18 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
                 progress.progress(1.0, text="Domain checks completed")
                 st.rerun()
             frame = pd.DataFrame(candidates).rename(columns={"reason": "Resolution reason", "confidence": "Confidence", "appearances": "Appearances", "domain": "Domain", "domain_status": "Status", "http_status": "HTTP", "final_url": "Final URL", "monthly_visits": "Monthly Visits", "yearly_visits": "Yearly Visits", "traffic_source": "Traffic Source", "checked_at": "Checked At"})
+            frame["HTTP meaning"] = frame.apply(
+                lambda row: http_status_meaning(row.get("HTTP"), row.get("detailed_status", "")),
+                axis=1,
+            )
             if active_only:
                 frame = frame[frame["Status"] == "Active"]
             frame = frame[frame["Status"].isin(statuses)]
             sort_column = {"Confidence": "Confidence", "Monthly visits": "Monthly Visits", "Yearly visits": "Yearly Visits"}[sort_by]
             frame = frame.sort_values(sort_column, ascending=False, na_position="last")
-            columns = ["Domain", "Confidence", "Appearances", "Status", "HTTP", "Final URL", "Monthly Visits", "Yearly Visits", "Traffic Source", "Checked At", "Resolution reason"]
+            columns = ["Domain", "Confidence", "Appearances", "Status", "HTTP", "HTTP meaning", "Final URL", "Monthly Visits", "Yearly Visits", "Traffic Source", "Checked At", "Resolution reason"]
             st.caption("Traffic figures are third-party estimated visits, not exact site analytics. Unavailable means no configured provider or no returned data.")
-            st.dataframe(frame.reindex(columns=columns), hide_index=True, column_config={"Final URL": st.column_config.LinkColumn("Final URL"), "Confidence": st.column_config.ProgressColumn("Confidence", min_value=0.0, max_value=1.0, format="percent")})
+            st.dataframe(frame.reindex(columns=columns), hide_index=True, column_config={"Final URL": st.column_config.LinkColumn("Final URL"), "HTTP meaning": st.column_config.TextColumn("HTTP meaning", width="large"), "Confidence": st.column_config.ProgressColumn("Confidence", min_value=0.0, max_value=1.0, format="percent")})
         if candidate_leads:
             st.markdown("**Certificate Transparency leads — not evidence**")
             st.dataframe(pd.DataFrame(candidate_leads), hide_index=True)
