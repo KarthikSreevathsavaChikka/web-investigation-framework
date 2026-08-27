@@ -96,6 +96,16 @@ docker compose ps
 docker compose logs -f app
 ```
 
+The first FastAPI service boundary runs independently at <http://localhost:8000>. Interactive OpenAPI documentation is available at <http://localhost:8000/docs>.
+
+```bash
+curl http://localhost:8000/health/ready
+curl http://localhost:8000/api/v1/investigations
+curl "http://localhost:8000/api/v1/investigations?component=osint"
+```
+
+This initial API slice is read-only. Long-running Playwright and OSINT jobs remain in the existing application until an asynchronous worker/queue service is introduced; they are intentionally not executed inside API request processes.
+
 Stop the containers without deleting PostgreSQL data:
 
 ```bash

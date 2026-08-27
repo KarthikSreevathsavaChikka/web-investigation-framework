@@ -1,0 +1,70 @@
+import unittest
+
+from fastapi.testclient import TestClient
+
+from services.api.dependencies import get_dynamic_repository, get_osint_repository
+from services.api.main import app
+
+
+class FakeDynamicRepository:
+    def get_all_investigations(self):
+        return [{
+            "id": "DYNAMIC_1", "website_url": "https://example.com",
+            "start_time": "2026-08-27T10:00:00", "end_time": None,
+            "investigation_status": "COMPLETED",
+        }]
+
+    def get_investigation_summary(self, investigation_id):
+        if investigation_id != "DYNAMIC_1":
+            return {"investigation": {}}
+        return {"investigation": self.get_all_investigations()[0], "pages_visited": 3}
+
+
+class FakeOSINTRepository:
+    def list_investigations(self):
+        return [{
+            "id": "OSINT_1", "target_domain": "example.org",
+            "started_at": "2026-08-27T11:00:00", "completed_at": None,
+            "status": "COMPLETED",
+        }]
+
+    def get_investigation(self, investigation_id):
+        return self.list_investigations()[0] if investigation_id == "OSINT_1" else {}
+
+    def get_summary_counts(self, investigation_id):
+        return {"configured_queries": 50, "pages_visited": 8}
+
+
+class APITests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        app.dependency_overrides[get_dynamic_repository] = FakeDynamicRepository
+        app.dependency_overrides[get_osint_repository] = FakeOSINTRepository
+        cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.dependency_overrides.clear()
+
+    def test_liveness(self):
+        response = self.client.get("/health/live")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ok")
+
+    def test_lists_both_components_and_filters(self):
+        response = self.client.get("/api/v1/investigations")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total"], 2)
+        filtered = self.client.get("/api/v1/investigations", params={"component": "osint"})
+        self.assertEqual(filtered.json()["items"][0]["component"], "osint")
+
+    def test_gets_details_and_returns_404(self):
+        response = self.client.get("/api/v1/investigations/osint/OSINT_1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["summary"]["pages_visited"], 8)
+        missing = self.client.get("/api/v1/investigations/dynamic/missing")
+        self.assertEqual(missing.status_code, 404)
+
+
+if __name__ == "__main__":
+    unittest.main()
