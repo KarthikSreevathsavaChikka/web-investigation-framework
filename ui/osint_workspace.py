@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -7,7 +8,6 @@ import pandas as pd
 import streamlit as st
 
 from osint.collectors import BraveSearchCollector
-from osint.dorks import QueryConfigurationError
 from osint.models import TargetResolution
 from osint.orchestrator import IntelligenceOrchestrator
 from osint.resolver import ResolutionProviderUnavailable, TargetResolver
@@ -16,11 +16,12 @@ from osint.docx_report import OSINTDocxReportBuilder
 from osint.search import BraveSearchProvider, GoogleSearchProvider, build_keyless_search_provider
 from osint.storage import OSINTRepository
 from osint.domain_intelligence import DomainIntelligenceService, http_status_meaning
+from ui.api_client import APIClientError
+from ui.job_status import get_api_client, render_osint_job_status
 
 
 def render_osint_workspace() -> None:
     repository = OSINTRepository()
-    orchestrator = IntelligenceOrchestrator(repository)
     resolver = TargetResolver()
     google_provider = GoogleSearchProvider()
     brave_provider = BraveSearchProvider()
@@ -34,6 +35,10 @@ def render_osint_workspace() -> None:
     )
     if notice := st.session_state.pop("osint_notice", None):
         st.success(notice)
+    if error := st.session_state.pop("osint_error", None):
+        st.error(error)
+    st.session_state.setdefault("osint_job_ids", [])
+    render_osint_job_status()
 
     history = repository.list_investigations()
     history_options = {f"{item['target_domain']} · {item['started_at']}": item["id"] for item in history}
@@ -131,33 +136,31 @@ def render_osint_workspace() -> None:
                 ":material/play_arrow: Start evidence discovery",
                 type="primary",
                 width="stretch",
-                disabled=not selected_domains or not collectors,
+                disabled=not selected_domains or not collectors or bool(st.session_state.osint_job_ids),
             ):
                 try:
-                    investigation_ids = []
+                    jobs = []
                     progress = st.progress(0, text="Starting evidence discovery…")
                     for index, domain in enumerate(selected_domains, start=1):
                         progress.progress(
                             (index - 1) / len(selected_domains),
                             text=f"Collecting public evidence for {domain}…",
                         )
-                        investigation_ids.append(
-                            orchestrator.run(
+                        jobs.append(
+                            get_api_client().submit_osint(
                                 domain,
-                                collectors,
+                                list(collectors),
                                 brand=resolution.resolved_brand,
-                                resolution=resolution,
+                                resolution=asdict(resolution),
+                                authorized=acknowledged,
                             )
                         )
-                    progress.progress(1.0, text="Evidence discovery completed")
-                    selected_id = investigation_ids[-1]
-                    st.session_state.osint_current_investigation = selected_id
-                    st.session_state.osint_notice = (
-                        f"Completed {len(investigation_ids)} evidence investigation(s). Latest: `{selected_id}`"
-                    )
+                    progress.progress(1.0, text="Evidence jobs queued")
+                    st.session_state.osint_job_ids = [job["id"] for job in jobs]
+                    st.session_state.osint_notice = f"Queued {len(jobs)} evidence investigation(s)."
                     st.session_state.pop("osint_resolution", None)
                     st.rerun()
-                except (QueryConfigurationError, ValueError) as exc:
+                except (APIClientError, ValueError) as exc:
                     st.error(str(exc))
 
     if history_options:

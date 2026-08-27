@@ -30,6 +30,7 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
+      API_BASE_URL: http://api:8000
       HEADLESS: "true"
     ports:
       - "8501:8501"
@@ -39,6 +40,8 @@ services:
       - reports_data:/app/reports
     depends_on:
       postgres:
+        condition: service_healthy
+      api:
         condition: service_healthy
     restart: unless-stopped
 

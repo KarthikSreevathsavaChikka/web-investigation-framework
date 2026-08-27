@@ -10,6 +10,7 @@ from core.browser_engine import PlaywrightInvestigationEngine
 from core.validator import TargetValidator
 from database.db_manager import DatabaseManager
 from osint.orchestrator import IntelligenceOrchestrator
+from osint.models import TargetCandidate, TargetResolution
 from services.jobs.queue import RedisJobQueue
 from services.jobs.repository import JobRepository
 
@@ -26,8 +27,21 @@ def _request_stop(*_args) -> None:
 def execute_job(job: dict) -> dict:
     payload = job["payload"]
     if job["component"] == "osint":
+        resolution_data = payload.get("resolution")
+        resolution = None
+        if resolution_data:
+            resolution = TargetResolution(
+                original_input=resolution_data["original_input"],
+                normalized_input=resolution_data["normalized_input"],
+                input_type=resolution_data["input_type"],
+                resolved_brand=resolution_data["resolved_brand"],
+                candidates=[TargetCandidate(**item) for item in resolution_data.get("candidates", [])],
+            )
         investigation_id = IntelligenceOrchestrator().run(
-            payload["target"], payload["collectors"], brand=payload.get("brand", "")
+            payload["target"],
+            payload["collectors"],
+            brand=payload.get("brand", ""),
+            resolution=resolution,
         )
         return {"investigation_id": investigation_id, "component": "osint"}
 

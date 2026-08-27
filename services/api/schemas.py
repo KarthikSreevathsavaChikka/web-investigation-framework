@@ -46,6 +46,7 @@ class OSINTJobRequest(BaseModel):
     target: str = Field(min_length=1, max_length=500)
     collectors: list[str] = Field(min_length=1)
     brand: str = Field(default="", max_length=200)
+    resolution: dict[str, Any] | None = None
     authorized: bool
 
 

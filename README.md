@@ -114,7 +114,9 @@ curl -X POST http://localhost:8000/api/v1/jobs/osint \
 curl http://localhost:8000/api/v1/jobs/JOB_ID_FROM_RESPONSE
 ```
 
-The dynamic endpoint is `POST /api/v1/jobs/dynamic`. Interactive login credentials are intentionally not accepted by the queue API; use the existing Streamlit flow when manual authentication is required.
+The dynamic endpoint is `POST /api/v1/jobs/dynamic`. Interactive login credentials are intentionally not accepted by the queue API; investigations requiring manual authentication are not yet supported in queued mode.
+
+The Streamlit UI now submits unattended Dynamic and OSINT investigations through these FastAPI endpoints. It polls job status in lightweight Streamlit fragments and opens completed investigation records from PostgreSQL. Interactive login, manual resume and queued-job cancellation are not yet supported by the worker API.
 
 Stop the containers without deleting PostgreSQL data:
 
