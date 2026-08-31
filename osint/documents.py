@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import hashlib
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 from osint.models import NormalizedTarget
@@ -58,6 +59,41 @@ def assess_pdf(content: bytes, target: NormalizedTarget, evidence_keywords: list
     pages = extract_pdf_pages(content)
     if not pages:
         return DocumentAssessment(False, reason="PDF text could not be extracted; manual review required")
+    return assess_document_pages(pages, target, evidence_keywords)
+
+
+def extract_docx_text(content: bytes) -> list[str]:
+    """Extract paragraphs and table cells from a bounded DOCX payload."""
+    try:
+        from docx import Document
+
+        document = Document(BytesIO(content))
+    except Exception:
+        return []
+    blocks = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            blocks.extend(cell.text for cell in row.cells if cell.text.strip())
+    return ["\n".join(blocks)] if blocks else []
+
+
+def assess_docx(
+    content: bytes,
+    target: NormalizedTarget,
+    evidence_keywords: list[str] | tuple[str, ...],
+) -> DocumentAssessment:
+    pages = extract_docx_text(content)
+    if not pages:
+        return DocumentAssessment(False, reason="DOCX text could not be extracted; manual review required")
+    return assess_document_pages(pages, target, evidence_keywords)
+
+
+def assess_document_pages(
+    pages: list[str],
+    target: NormalizedTarget,
+    evidence_keywords: list[str] | tuple[str, ...],
+) -> DocumentAssessment:
+    """Apply the same target and evidence checks to any extracted document text."""
     variants = build_target_variants(target)
     target_hits = [(number, find_target_reference(text, variants)) for number, text in enumerate(pages, 1)]
     target_hits = [(number, variant) for number, variant in target_hits if variant]

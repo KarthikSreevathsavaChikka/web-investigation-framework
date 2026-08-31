@@ -470,20 +470,69 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
 
     with documents_tab:
         if documents:
+            st.caption(
+                "Verified PDF and DOCX files discovered by automated search queries. "
+                "Each stored file keeps its source URL, SHA-256 hash, and query provenance."
+            )
+            st.metric("Verified documents", len(documents), border=True)
+            document_rows = []
+            for document in documents:
+                row = dict(document)
+                row["found_by_queries"] = ", ".join(
+                    dict.fromkeys(
+                        query.get("query_id", "")
+                        for query in document.get("discovery_queries", [])
+                        if query.get("query_id")
+                    )
+                )
+                document_rows.append(row)
             st.dataframe(
-                pd.DataFrame(documents).drop(columns=["page_screenshots"], errors="ignore"),
+                pd.DataFrame(document_rows).drop(
+                    columns=["id", "local_path", "page_screenshots", "discovery_queries"],
+                    errors="ignore",
+                ),
                 hide_index=True,
-                column_config={"source_url": st.column_config.LinkColumn("Source URL")},
+                column_config={
+                    "source_url": st.column_config.LinkColumn("Source URL"),
+                    "final_url": st.column_config.LinkColumn("Final URL"),
+                    "size_bytes": st.column_config.NumberColumn("Size", format="%d bytes"),
+                    "found_by_queries": st.column_config.TextColumn("Found by queries"),
+                },
             )
             for document in documents:
+                file_name = document.get("file_name") or Path(document["local_path"]).name
+                query_ids = ", ".join(
+                    dict.fromkeys(
+                        query.get("query_id", "")
+                        for query in document.get("discovery_queries", [])
+                        if query.get("query_id")
+                    )
+                ) or "Legacy investigation"
+                with st.container(border=True):
+                    st.markdown(f"**{file_name}**")
+                    st.caption(
+                        f"{document.get('document_type') or 'Public document'} · "
+                        f"Found by: {query_ids} · SHA-256: {document['sha256']}"
+                    )
+                    st.link_button(":material/open_in_new: Open source", document["source_url"])
+                    content = repository.get_document_content(investigation_id, document["id"])
+                    if content:
+                        st.download_button(
+                            ":material/download: Download stored document",
+                            data=content,
+                            file_name=file_name,
+                            mime=document.get("media_type") or "application/octet-stream",
+                            key=f"document_download_{investigation_id}_{document['id']}",
+                        )
+                    else:
+                        st.caption("This legacy record contains metadata only; download it from the source link.")
                 for capture in document.get("page_screenshots", []):
                     image_path = Path(capture["path"])
                     if image_path.is_file():
-                        with st.container(border=True):
-                            st.markdown(f"**{document['document_type']} · page {capture['page']}**")
-                            st.image(str(image_path), width="stretch")
-                            st.caption(f"SHA-256: {capture['sha256']}")
-                            st.write(document.get("evidence_context") or "Target-specific document evidence")
+                        st.markdown(f"**Evidence page {capture['page']}**")
+                        st.image(str(image_path), width="stretch")
+                        st.caption(f"Screenshot SHA-256: {capture['sha256']}")
+                        st.write(document.get("evidence_context") or "Target-specific document evidence")
         else:
             st.info(
                 "No target-related public documents were downloaded. Only accepted search-result documents are downloaded; "

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import asyncio
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,7 +16,9 @@ from osint.models import CollectorResult, DorkQuery, EvidenceScreenshotRecord, O
 from osint.normalizer import DomainNormalizer, TargetNormalizationError
 from osint.risk import RiskScorer
 from osint.storage import OSINTRepository
-from osint.documents import assess_pdf
+from docx import Document
+
+from osint.documents import assess_docx, assess_pdf
 from core.playwright_session import close_browser_session, launch_browser_session
 from osint.search import AggregatingSearchProvider, BingRSSSearchProvider, DuckDuckGoSearchProvider, GoogleSearchProvider, SearchProvider
 from osint.collectors.brave_search import KeylessSearchCollector
@@ -118,6 +121,48 @@ class RepositoryTests(unittest.TestCase):
             ]
             repository.save_collector_result("OSINT_DOCS", CollectorResult("search", "COMPLETED", observations))
             self.assertEqual(repository.get_sources("OSINT_DOCS")[0]["source_url"], "https://papers.test/example.pdf")
+            document_sources = repository.get_document_sources("OSINT_DOCS")
+            self.assertEqual(document_sources[0]["source_url"], "https://papers.test/example.pdf")
+            self.assertEqual(document_sources[0]["discovery_queries"][0]["query_id"], "B001")
+
+    def test_stores_document_content_and_query_provenance(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = OSINTRepository(Path(temp_dir) / "osint.db")
+            target = DomainNormalizer.normalize("example.com")
+            repository.create_investigation("OSINT_DOCUMENT_BYTES", target)
+            artifact = Path(temp_dir) / "example.pdf"
+            artifact.write_bytes(b"verified-pdf-content")
+            repository.save_collector_result(
+                "OSINT_DOCUMENT_BYTES",
+                CollectorResult(
+                    "public_search_results",
+                    "COMPLETED",
+                    [
+                        Observation(
+                            "public_search_results",
+                            "Documents",
+                            "PUBLIC_DOCUMENT",
+                            "https://files.test/example.pdf",
+                            "https://search.test/result",
+                            metadata={
+                                "artifact_path": str(artifact),
+                                "sha256": "sha-test",
+                                "content_length": artifact.stat().st_size,
+                                "file_name": "example.pdf",
+                                "media_type": "application/pdf",
+                                "discovery_queries": [{"query_id": "B001", "query_text": "filetype:pdf Example"}],
+                            },
+                        )
+                    ],
+                ),
+            )
+            document = repository.get_documents("OSINT_DOCUMENT_BYTES")[0]
+            self.assertEqual(document["file_name"], "example.pdf")
+            self.assertEqual(document["discovery_queries"][0]["query_id"], "B001")
+            self.assertEqual(
+                repository.get_document_content("OSINT_DOCUMENT_BYTES", document["id"]),
+                b"verified-pdf-content",
+            )
 
     def test_persists_screenshot_metadata_and_query_metrics(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -202,6 +247,18 @@ class EvidenceCaptureTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(result.matched_keywords, ())
         self.assertEqual(result.relevant_pages, (1,))
+
+    def test_docx_requires_target_and_extracts_evidence(self):
+        buffer = BytesIO()
+        document = Document()
+        document.add_heading("Diuwin payment guide", level=1)
+        document.add_paragraph("Diuwin customers can use a wallet for deposits and withdrawals.")
+        document.save(buffer)
+        target = DomainNormalizer.normalize("diuwin.example")
+        target = type(target)(target.raw_input, target.domain, target.url, brand="Diuwin")
+        result = assess_docx(buffer.getvalue(), target, ["wallet", "deposit", "withdrawal"])
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.document_type, "Payment / Deposit / Withdrawal")
 
     def test_playwright_highlights_fixture_and_takes_screenshot(self):
         async def exercise():

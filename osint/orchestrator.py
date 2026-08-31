@@ -51,7 +51,7 @@ class IntelligenceOrchestrator:
         context = CollectorContext(
             queries=queries,
             request_timeout=max(3, min(int(os.getenv("OSINT_REQUEST_TIMEOUT", "10")), 60)),
-            search_query_budget=max(1, min(int(os.getenv("OSINT_QUERY_BUDGET", "12")), len(queries))),
+            search_query_budget=max(1, min(int(os.getenv("OSINT_QUERY_BUDGET", str(len(queries)))), len(queries))),
             results_per_query=max(1, min(int(os.getenv("OSINT_RESULTS_PER_QUERY", "10")), 20)),
         )
         self.repository.create_investigation(investigation_id, target, resolution=resolution)
@@ -87,8 +87,16 @@ class IntelligenceOrchestrator:
                 investigation_id, CollectorResult("domain_availability", "PARTIAL", error=str(exc), duration_seconds=time.monotonic() - check_started)
             )
 
+        document_budget = max(0, min(int(os.getenv("OSINT_DOCUMENT_DOWNLOAD_BUDGET", "25")), 100))
+        document_sources = self.repository.get_document_sources(investigation_id, document_budget)
         source_budget = max(0, min(int(os.getenv("OSINT_SOURCE_CRAWL_BUDGET", "8")), 25))
-        sources = self.repository.get_sources(investigation_id)[:source_budget]
+        ordinary_sources = self.repository.get_sources(investigation_id)[:source_budget]
+        sources = list(
+            {
+                item["normalized_url"]: item
+                for item in document_sources + ordinary_sources
+            }.values()
+        )
         if sources:
             source_result = PublicSearchResultCollector().collect(
                 target,
