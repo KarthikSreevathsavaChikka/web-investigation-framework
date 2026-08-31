@@ -39,7 +39,7 @@ class PublicSearchResultCollector:
         started = time.monotonic()
         observations = []
         max_bytes = max(100_000, min(int(os.getenv("OSINT_MAX_ARTIFACT_BYTES", "5000000")), 25_000_000))
-        request_delay = max(0.0, min(float(os.getenv("OSINT_SOURCE_REQUEST_DELAY", "0.5")), 5.0))
+        request_delay = max(0.0, min(float(os.getenv("OSINT_SOURCE_REQUEST_DELAY", "0")), 5.0))
         for source in sources:
             if cancel_check and cancel_check():
                 raise InvestigationCancelled("Investigation cancelled during source collection")

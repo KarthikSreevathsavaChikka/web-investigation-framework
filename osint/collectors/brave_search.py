@@ -37,7 +37,7 @@ class BraveSearchCollector(Collector):
             return []
 
         observations = []
-        default_delay = "0.25" if self.provider.name == "brave" else "1.5"
+        default_delay = "0"
         request_delay = max(0.0, min(float(os.getenv("OSINT_SEARCH_REQUEST_DELAY", default_delay)), 5.0))
         selected_queries = list(context.queries)[: context.search_query_budget]
         for index, query in enumerate(selected_queries):

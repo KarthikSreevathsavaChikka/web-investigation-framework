@@ -75,6 +75,7 @@ class AggregatingSearchProvider(SearchProvider):
         self.providers = [provider for provider in providers if provider.available]
         self.name = name or type(self).name
         self._executions: dict[str, tuple[SearchProviderExecution, ...]] = {}
+        self._failed_providers: set[str] = set()
 
     @property
     def available(self) -> bool:
@@ -85,9 +86,18 @@ class AggregatingSearchProvider(SearchProvider):
         seen: set[str] = set()
         executions: list[SearchProviderExecution] = []
         for provider in self.providers:
+            if provider.name in self._failed_providers:
+                executions.append(SearchProviderExecution(
+                    query_id=query_id,
+                    provider=provider.name,
+                    status="failed",
+                    error="Skipped after an earlier provider failure in this search batch",
+                ))
+                continue
             try:
                 results = provider.search(query, query_id=query_id, count=count)
             except Exception as exc:
+                self._failed_providers.add(provider.name)
                 executions.append(SearchProviderExecution(
                     query_id=query_id,
                     provider=provider.name,
@@ -126,8 +136,9 @@ class AggregatingSearchProvider(SearchProvider):
 def build_keyless_search_provider() -> AggregatingSearchProvider:
     """Create the standard keyless provider group used across resolution and discovery."""
 
+    timeout = max(1, min(int(os.getenv("OSINT_KEYLESS_SEARCH_TIMEOUT", "3")), 15))
     return AggregatingSearchProvider(
-        [BingRSSSearchProvider(), DuckDuckGoSearchProvider()],
+        [BingRSSSearchProvider(timeout=timeout), DuckDuckGoSearchProvider(timeout=timeout)],
         name="keyless_aggregated",
     )
 

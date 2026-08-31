@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 
 from osint.models import NormalizedTarget, SearchResult
 from osint.relevance import assess_serp_result, assess_page_relevance, target_keyword_proximity, build_target_variants
@@ -104,6 +105,22 @@ class TargetResolverTests(unittest.TestCase):
             [("successful", "completed"), ("rate_limited", "failed")],
         )
         self.assertIn("rate-limited", reports[1].error)
+
+    def test_aggregator_skips_a_provider_after_its_first_failure(self):
+        successful = StaticSearchProvider(
+            "successful",
+            [("ExampleBet", "https://examplebet.com", "Official")],
+        )
+        failed = RateLimitedSearchProvider()
+        failed.search = Mock(side_effect=RuntimeError("timed out"))
+        provider = AggregatingSearchProvider([successful, failed])
+
+        provider.search("ExampleBet", query_id="R1", count=20)
+        provider.search("ExampleBet official", query_id="R2", count=20)
+
+        self.assertEqual(failed.search.call_count, 1)
+        second_reports = provider.execution_reports("R2")
+        self.assertIn("Skipped after an earlier provider failure", second_reports[1].error)
 
     def test_aggregator_distinguishes_all_failed_from_no_results(self):
         provider = AggregatingSearchProvider([RateLimitedSearchProvider()])

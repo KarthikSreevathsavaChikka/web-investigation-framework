@@ -83,7 +83,7 @@ class TargetResolver:
             )
         results = []
         provider_errors = []
-        request_delay = max(0.0, min(float(os.getenv("OSINT_SEARCH_REQUEST_DELAY", "1.5")), 5.0))
+        request_delay = max(0.0, min(float(os.getenv("OSINT_RESOLUTION_REQUEST_DELAY", "0")), 5.0))
         compact_brand = re.sub(r"[^a-zA-Z0-9]", "", normalized_input)
         for index, template in enumerate(self.DISCOVERY_QUERIES, start=1):
             query = template.format(brand=normalized_input, compact_brand=compact_brand)
