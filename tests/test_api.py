@@ -65,13 +65,33 @@ class FakeJobRepository:
         self.jobs[job_id]["status"] = "FAILED"
         self.jobs[job_id]["error"] = error
 
+    def mark_cancelling(self, job_id):
+        self.jobs[job_id]["status"] = "CANCELLING"
+
+    def mark_cancelled(self, job_id):
+        self.jobs[job_id]["status"] = "CANCELLED"
+        self.jobs[job_id]["completed_at"] = "2026-08-27T12:01:00+00:00"
+
 
 class FakeJobQueue:
     def __init__(self):
         self.enqueued = []
+        self.cancelled = set()
 
     def enqueue(self, job_id):
         self.enqueued.append(job_id)
+
+    def request_cancel(self, job_id):
+        self.cancelled.add(job_id)
+
+    def remove_pending(self, job_id):
+        if job_id not in self.enqueued:
+            return False
+        self.enqueued.remove(job_id)
+        return True
+
+    def clear_cancellation(self, job_id):
+        self.cancelled.discard(job_id)
 
 
 class APITests(unittest.TestCase):
@@ -125,6 +145,17 @@ class APITests(unittest.TestCase):
             "target": "https://example.com", "max_pages": 5, "authorized": False,
         })
         self.assertEqual(response.status_code, 400)
+
+    def test_cancels_a_queued_job_immediately(self):
+        self.client.post("/api/v1/jobs/osint", json={
+            "target": "cancel.example",
+            "collectors": ["DNS"],
+            "authorized": True,
+        })
+        response = self.client.post("/api/v1/jobs/JOB_1/cancel")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "CANCELLED")
+        self.assertNotIn("JOB_1", self.queue.enqueued)
 
 
 if __name__ == "__main__":

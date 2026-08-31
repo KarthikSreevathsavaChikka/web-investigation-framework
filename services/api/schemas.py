@@ -40,6 +40,8 @@ class JobStatus(str, Enum):
     RUNNING = "RUNNING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    CANCELLING = "CANCELLING"
+    CANCELLED = "CANCELLED"
 
 
 class OSINTJobRequest(BaseModel):

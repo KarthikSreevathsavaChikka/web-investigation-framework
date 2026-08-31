@@ -615,6 +615,13 @@ class OSINTRepository:
                 ],
             )
 
+    def cancel(self, investigation_id: str) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE osint_investigations SET completed_at = ?, status = 'CANCELLED' WHERE id = ?",
+                (utc_now(), investigation_id),
+            )
+
     def list_investigations(self) -> list[dict]:
         with self.connection() as connection:
             rows = connection.execute("SELECT * FROM osint_investigations ORDER BY started_at DESC").fetchall()

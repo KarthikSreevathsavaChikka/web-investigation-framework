@@ -5,7 +5,7 @@ import uuid
 import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable
+from typing import Callable, Iterable
 
 from osint.collectors import BraveSearchCollector, CertificateTransparencyCollector, DNSCollector, GoogleSearchCollector, KeylessSearchCollector, PublicWebCollector, RDAPCollector, WaybackCDXCollector
 from osint.collectors.base import Collector, CollectorContext
@@ -17,6 +17,7 @@ from osint.risk import RiskScorer
 from osint.storage import OSINTRepository
 from osint.evidence_capture import SERPEvidenceCapturePipeline
 from osint.domain_intelligence import DomainIntelligenceService
+from osint.cancellation import InvestigationCancelled
 from config import EVIDENCE_DIR
 
 
@@ -43,7 +44,15 @@ class IntelligenceOrchestrator:
         *,
         brand: str = "",
         resolution: TargetResolution | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> str:
+        def raise_if_cancelled() -> None:
+            if cancel_check and cancel_check():
+                if investigation_id:
+                    self.repository.cancel(investigation_id)
+                raise InvestigationCancelled("Investigation cancelled by operator")
+
+        investigation_id = ""
         target = DomainNormalizer.normalize(raw_target)
         target = NormalizedTarget(target.raw_input, target.domain, target.url, brand=brand or target.brand)
         investigation_id = f"OSINT_{uuid.uuid4().hex[:10].upper()}"
@@ -53,22 +62,30 @@ class IntelligenceOrchestrator:
             request_timeout=max(3, min(int(os.getenv("OSINT_REQUEST_TIMEOUT", "10")), 60)),
             search_query_budget=max(1, min(int(os.getenv("OSINT_QUERY_BUDGET", str(len(queries)))), len(queries))),
             results_per_query=max(1, min(int(os.getenv("OSINT_RESULTS_PER_QUERY", "10")), 20)),
+            cancel_check=cancel_check,
         )
         self.repository.create_investigation(investigation_id, target, resolution=resolution)
         self.repository.save_queries(investigation_id, queries)
+        raise_if_cancelled()
 
         collectors = [self.COLLECTORS[name]() for name in enabled_collectors if name in self.COLLECTORS]
         all_observations = []
         had_success = False
-        with ThreadPoolExecutor(max_workers=min(max(len(collectors), 1), 4)) as executor:
-            future_map = {executor.submit(self._execute, collector, target, context): collector for collector in collectors}
-            for future in as_completed(future_map):
-                result = future.result()
-                self.repository.save_collector_result(investigation_id, result)
-                all_observations.extend(result.observations)
-                had_success = had_success or result.status == "COMPLETED"
+        try:
+            with ThreadPoolExecutor(max_workers=min(max(len(collectors), 1), 4)) as executor:
+                future_map = {executor.submit(self._execute, collector, target, context): collector for collector in collectors}
+                for future in as_completed(future_map):
+                    raise_if_cancelled()
+                    result = future.result()
+                    self.repository.save_collector_result(investigation_id, result)
+                    all_observations.extend(result.observations)
+                    had_success = had_success or result.status == "COMPLETED"
+        except InvestigationCancelled:
+            self.repository.cancel(investigation_id)
+            raise
 
         # CT discoveries are leads, not evidence, but must receive the same safe availability check.
+        raise_if_cancelled()
         self.repository.add_candidate_domains(
             investigation_id,
             [item.value for item in all_observations if item.entity_type == "CANDIDATE_DOMAIN"],
@@ -98,17 +115,23 @@ class IntelligenceOrchestrator:
             }.values()
         )
         if sources:
-            source_result = PublicSearchResultCollector().collect(
-                target,
-                sources,
-                timeout=context.request_timeout,
-                investigation_id=investigation_id,
-            )
+            try:
+                source_result = PublicSearchResultCollector().collect(
+                    target,
+                    sources,
+                    timeout=context.request_timeout,
+                    investigation_id=investigation_id,
+                    cancel_check=cancel_check,
+                )
+            except InvestigationCancelled:
+                self.repository.cancel(investigation_id)
+                raise
             self.repository.save_collector_result(investigation_id, source_result)
             all_observations.extend(source_result.observations)
 
         evidence_budget = max(0, min(int(os.getenv("OSINT_EVIDENCE_SOURCE_BUDGET", "8")), 25))
         evidence_tasks = self.repository.get_evidence_tasks(investigation_id, evidence_budget)
+        raise_if_cancelled()
         if evidence_tasks:
             started = time.monotonic()
             try:
@@ -137,6 +160,7 @@ class IntelligenceOrchestrator:
             )
 
         assessment = RiskScorer.assess(all_observations)
+        raise_if_cancelled()
         status = "COMPLETED" if had_success or not collectors else "PARTIAL"
         self.repository.complete(investigation_id, assessment, status)
         return investigation_id
@@ -151,5 +175,7 @@ class IntelligenceOrchestrator:
                 for item in observations
             ) else "COMPLETED"
             return CollectorResult(collector.name, status, observations, duration_seconds=time.monotonic() - started)
+        except InvestigationCancelled:
+            raise
         except Exception as exc:
             return CollectorResult(collector.name, "FAILED", error=str(exc), duration_seconds=time.monotonic() - started)

@@ -24,6 +24,7 @@ from osint.search import AggregatingSearchProvider, BingRSSSearchProvider, DuckD
 from osint.collectors.brave_search import KeylessSearchCollector
 from osint.collectors.base import CollectorContext
 from osint.collectors.free_discovery import CertificateTransparencyCollector, WaybackCDXCollector
+from osint.cancellation import InvestigationCancelled
 from osint.docx_report import OSINTDocxReportBuilder
 from osint.text_cleanup import clean_evidence_text, evidence_scope
 
@@ -290,6 +291,16 @@ class EvidenceCaptureTests(unittest.TestCase):
 
 
 class KeylessSearchProviderTests(unittest.TestCase):
+    def test_search_collection_stops_at_cancellation_checkpoint(self):
+        query = DorkQuery("B001", "documents", "PDFs", "critical", 'filetype:pdf "Example"', "PDFs")
+        context = CollectorContext(
+            [query],
+            search_query_budget=1,
+            cancel_check=lambda: True,
+        )
+        with self.assertRaises(InvestigationCancelled):
+            KeylessSearchCollector().collect(DomainNormalizer.normalize("example.com"), context)
+
     def test_combined_collector_records_each_provider_and_partial_failure(self):
         class StaticProvider(SearchProvider):
             capabilities = BingRSSSearchProvider.capabilities

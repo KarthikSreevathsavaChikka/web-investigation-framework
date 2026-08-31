@@ -64,6 +64,16 @@ class FrameworkAPIClientTests(unittest.TestCase):
         with self.assertRaisesRegex(APIClientError, "Queue unavailable"):
             client.get_job("JOB_3")
 
+    def test_requests_job_cancellation(self):
+        session = FakeSession(FakeResponse({"id": "JOB_4", "status": "CANCELLING"}))
+        client = FrameworkAPIClient("http://api:8000", session=session)
+        response = client.cancel_job("JOB_4")
+        self.assertEqual(response["status"], "CANCELLING")
+        self.assertEqual(
+            session.calls[0][:2],
+            ("POST", "http://api:8000/api/v1/jobs/JOB_4/cancel"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

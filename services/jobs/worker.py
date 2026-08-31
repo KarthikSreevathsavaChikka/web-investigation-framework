@@ -11,6 +11,7 @@ from core.browser_engine import PlaywrightInvestigationEngine
 from core.validator import TargetValidator
 from database.db_manager import DatabaseManager
 from osint.orchestrator import IntelligenceOrchestrator
+from osint.cancellation import InvestigationCancelled
 from osint.models import TargetCandidate, TargetResolution
 from services.jobs.queue import RedisJobQueue
 from services.jobs.repository import JobRepository
@@ -27,7 +28,7 @@ def _request_stop(*_args) -> None:
     stopping = True
 
 
-def execute_job(job: dict) -> dict:
+def execute_job(job: dict, cancel_check=None) -> dict:
     payload = job["payload"]
     if job["component"] == "osint":
         resolution_data = payload.get("resolution")
@@ -45,6 +46,7 @@ def execute_job(job: dict) -> dict:
             payload["collectors"],
             brand=payload.get("brand", ""),
             resolution=resolution,
+            cancel_check=cancel_check,
         )
         return {"investigation_id": investigation_id, "component": "osint"}
 
@@ -69,14 +71,28 @@ def execute_job(job: dict) -> dict:
     )
 
     async def run_dynamic_investigation() -> dict:
-        return await asyncio.wait_for(
+        task = asyncio.create_task(
             engine.run_investigation(
                 validation["final_url"],
                 investigation_id,
                 allow_manual_auth=False,
-            ),
-            timeout=timeout_seconds,
+            )
         )
+        elapsed = 0
+        while not task.done() and elapsed < timeout_seconds:
+            if cancel_check and cancel_check():
+                engine.request_stop()
+            done, _ = await asyncio.wait({task}, timeout=1)
+            if done:
+                break
+            elapsed += 1
+        if not task.done():
+            task.cancel()
+            raise TimeoutError
+        result = await task
+        if cancel_check and cancel_check():
+            raise InvestigationCancelled("Investigation cancelled by operator")
+        return result
 
     try:
         result = asyncio.run(run_dynamic_investigation())
@@ -127,16 +143,28 @@ def run() -> None:
             if job["status"] == "COMPLETED":
                 queue.acknowledge(job_id)
                 continue
+            if job["status"] in {"CANCELLING", "CANCELLED"} or queue.cancellation_requested(job_id):
+                repository.mark_cancelled(job_id)
+                queue.acknowledge(job_id)
+                queue.clear_cancellation(job_id)
+                continue
             job = repository.mark_running(job_id)
             logger.info("Running %s job %s for %s", job["component"], job_id, job["target"])
             try:
-                repository.mark_completed(job_id, execute_job(job))
+                repository.mark_completed(
+                    job_id,
+                    execute_job(job, lambda: queue.cancellation_requested(job_id)),
+                )
                 logger.info("Completed job %s", job_id)
+            except InvestigationCancelled:
+                logger.info("Cancelled job %s", job_id)
+                repository.mark_cancelled(job_id)
             except Exception as exc:
                 logger.exception("Job %s failed", job_id)
                 repository.mark_failed(job_id, str(exc))
             finally:
                 queue.acknowledge(job_id)
+                queue.clear_cancellation(job_id)
     finally:
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=WORKER_HEARTBEAT_INTERVAL_SECONDS + 1)

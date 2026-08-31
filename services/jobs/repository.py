@@ -90,6 +90,22 @@ class JobRepository:
                 (error[:4000], _now(), job_id),
             )
 
+    def mark_cancelling(self, job_id: str) -> None:
+        with connect_database() as connection:
+            connection.execute(
+                "UPDATE investigation_jobs SET status = 'CANCELLING' WHERE id = ?",
+                (job_id,),
+            )
+
+    def mark_cancelled(self, job_id: str) -> None:
+        with connect_database() as connection:
+            connection.execute(
+                """UPDATE investigation_jobs
+                SET status = 'CANCELLED', completed_at = ?, error = NULL
+                WHERE id = ?""",
+                (_now(), job_id),
+            )
+
     @staticmethod
     def _deserialize(row: dict[str, Any]) -> dict[str, Any]:
         row["payload"] = json.loads(row.pop("payload_json") or "{}")

@@ -58,6 +58,9 @@ class FrameworkAPIClient:
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self._request("GET", f"/api/v1/jobs/{job_id}")
 
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        return self._request("POST", f"/api/v1/jobs/{job_id}/cancel")
+
     def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
         try:
             response = self.session.request(

@@ -5,6 +5,7 @@ import time
 from urllib.parse import quote_plus
 
 from osint.collectors.base import Collector, CollectorContext
+from osint.cancellation import InvestigationCancelled
 from osint.evidence import SearchSnippetEvidenceExtractor
 from osint.models import NormalizedTarget, Observation
 from osint.search import (
@@ -40,6 +41,8 @@ class BraveSearchCollector(Collector):
         request_delay = max(0.0, min(float(os.getenv("OSINT_SEARCH_REQUEST_DELAY", default_delay)), 5.0))
         selected_queries = list(context.queries)[: context.search_query_budget]
         for index, query in enumerate(selected_queries):
+            if context.cancellation_requested():
+                raise InvestigationCancelled("Investigation cancelled during search execution")
             try:
                 results = self.provider.search(
                     query.query,
