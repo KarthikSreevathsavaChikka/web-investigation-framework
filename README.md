@@ -23,7 +23,7 @@ The OSINT workspace currently provides:
 - DOM-safe keyword highlighting and bounded Playwright viewport screenshots
 - Screenshot SHA-256 provenance, surrounding text, source rank, and query linkage
 - Evidence gallery and self-contained evidence screenshots in HTML reports
-- Structured SQLite persistence with evidence hashes
+- Structured PostgreSQL persistence with evidence hashes (SQLite remains available for isolated tests)
 - Explainable risk scoring and collector status reporting
 - Downloadable, source-traceable HTML report
 - Safe HTTPS/HTTP domain availability checks for resolved and related domains, with redirect validation
@@ -76,6 +76,55 @@ Run the application:
 ```bash
 .venv/bin/streamlit run app.py
 ```
+
+## Run the complete framework with Docker
+
+Docker Compose runs the Streamlit application and a fresh PostgreSQL 16 database. It does not read or modify the SQLite database in the original `Web-Investigator` repository.
+
+The `schema_migrations` table tracks schema version 1 independently for the Dynamic Investigation and OSINT components.
+
+```bash
+cp .env.example .env
+# Change POSTGRES_PASSWORD in .env, then start everything:
+docker compose up --build -d
+```
+
+Open <http://localhost:8501>. Check status and logs with:
+
+```bash
+docker compose ps
+docker compose logs -f app
+```
+
+The first FastAPI service boundary runs independently at <http://localhost:8000>. Interactive OpenAPI documentation is available at <http://localhost:8000/docs>.
+
+```bash
+curl http://localhost:8000/health/ready
+curl http://localhost:8000/api/v1/investigations
+curl "http://localhost:8000/api/v1/investigations?component=osint"
+```
+
+Long-running Playwright and OSINT investigations can now be submitted to FastAPI and executed by the separate worker through Redis. PostgreSQL keeps durable job status while Redis transports queued job IDs.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/jobs/osint \
+  -H 'Content-Type: application/json' \
+  -d '{"target":"example.com","collectors":["DNS","RDAP","Public website"],"brand":"Example","authorized":true}'
+
+curl http://localhost:8000/api/v1/jobs/JOB_ID_FROM_RESPONSE
+```
+
+The dynamic endpoint is `POST /api/v1/jobs/dynamic`. Interactive login credentials are intentionally not accepted by the queue API; investigations requiring manual authentication are not yet supported in queued mode.
+
+The Streamlit UI now submits unattended Dynamic and OSINT investigations through these FastAPI endpoints. It polls job status in lightweight Streamlit fragments and opens completed investigation records from PostgreSQL. Interactive login, manual resume and queued-job cancellation are not yet supported by the worker API.
+
+Stop the containers without deleting PostgreSQL data:
+
+```bash
+docker compose down
+```
+
+The named `postgres_data` and `redis_data` volumes persist database records and queued work. Do not run `docker compose down -v` unless you intentionally want to delete that fresh data.
 
 Run the OSINT and evidence-capture tests:
 

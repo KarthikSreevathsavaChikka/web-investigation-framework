@@ -17,6 +17,41 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safa
 VALID_CODES = {200, 201, 202, 204, 301, 302, 303, 307, 308, 401, 403, 405, 429}
 
 
+def http_status_meaning(status: str, detailed_status: str = "") -> str:
+    """Return a concise analyst-facing explanation of an HTTP check result."""
+    normalized = str(status or "Unavailable").strip()
+    if normalized == "403":
+        return "Server exists but blocks automated access, your location, or this user."
+    if normalized == "401":
+        return "Server exists but requires authentication."
+    if normalized == "405":
+        return "Server exists but does not allow the requested HTTP method."
+    if normalized == "429":
+        return "Server exists but is temporarily rate-limiting requests."
+    if normalized in {"301", "302", "303", "307", "308"}:
+        return "Server redirects requests to another URL."
+    if normalized.isdigit():
+        code = int(normalized)
+        if 200 <= code < 300:
+            if "Redirected" in detailed_status:
+                return "Server responded successfully after redirecting to the final URL."
+            return "Server responded successfully."
+        if code == 404:
+            return "Server exists, but this page was not found."
+        if 400 <= code < 500:
+            return "Server returned a client-request error."
+        if 500 <= code < 600:
+            return "Server exists but currently has a server-side error."
+    meanings = {
+        "DNS Failed": "Domain did not resolve in DNS.",
+        "Connection Refused": "Host was reached but refused the connection.",
+        "Timeout": "No response arrived before the timeout.",
+        "Blocked": "The redirect destination was blocked by safety validation.",
+        "Unavailable": "No conclusive HTTP response was available.",
+    }
+    return meanings.get(normalized, "HTTP result requires analyst review.")
+
+
 @dataclass
 class DomainCheck:
     domain: str

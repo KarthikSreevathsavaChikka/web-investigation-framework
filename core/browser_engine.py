@@ -70,6 +70,27 @@ class PlaywrightInvestigationEngine:
         except Exception as e:
             logger.error(f"Error closing browser: {e}")
 
+    async def get_stable_page_content(self, attempts: int = 4) -> str:
+        """Read the DOM while tolerating short redirect/navigation races."""
+        if not self.page:
+            raise RuntimeError("Browser page is not initialized")
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return await self.page.content()
+            except Exception as exc:
+                last_error = exc
+                if "page is navigating" not in str(exc).lower() or attempt == attempts - 1:
+                    raise
+                try:
+                    await self.page.wait_for_load_state(
+                        "domcontentloaded", timeout=5000
+                    )
+                except Exception:
+                    pass
+                await asyncio.sleep(0.5)
+        raise RuntimeError("Unable to read page content") from last_error
+
     async def check_login_required(
         self, page: Page, html_content: str, url: str
     ) -> bool:
@@ -154,6 +175,7 @@ class PlaywrightInvestigationEngine:
         auth_user: str = "",
         auth_pass: str = "",
         auth_mode: str = "Auto-Detect",
+        allow_manual_auth: bool = True,
     ) -> Dict[str, Any]:
         """
         Executes the full automated evidence collection workflow (Steps 3-11).
@@ -195,7 +217,7 @@ class PlaywrightInvestigationEngine:
             await asyncio.sleep(2.5)  # Wait for dynamic rendering
 
             homepage_url = self.page.url
-            homepage_html = await self.page.content()
+            homepage_html = await self.get_stable_page_content()
 
             # --- ROOT-LEVEL AUTHENTICATION CHECK ---
             try:
@@ -207,7 +229,9 @@ class PlaywrightInvestigationEngine:
                     .filter(has_not_text="Sign up")
                     .first
                 )
-                if await login_btn.is_visible():
+                if await login_btn.is_visible() and (
+                    allow_manual_auth or (auth_user and auth_pass)
+                ):
                     self._log(
                         log_callback,
                         investigation_id,
@@ -218,7 +242,7 @@ class PlaywrightInvestigationEngine:
             except Exception:
                 pass
 
-            page_html = await self.page.content()
+            page_html = await self.get_stable_page_content()
             page_url = self.page.url
 
             if await self.check_login_required(self.page, page_html, page_url):
@@ -497,7 +521,7 @@ class PlaywrightInvestigationEngine:
                                 pass
 
                             if not await self.check_login_required(
-                                self.page, await self.page.content(), self.page.url
+                                self.page, await self.get_stable_page_content(), self.page.url
                             ):
                                 self._log(
                                     log_callback,
@@ -523,53 +547,61 @@ class PlaywrightInvestigationEngine:
                         )
 
                 if not auto_login_success:
-                    self._log(
-                        log_callback,
-                        investigation_id,
-                        f"🔑 Manual Login Required! Please log in in the browser window on screen...",
-                        "WARNING",
-                    )
-                    try:
-                        await self.page.bring_to_front()
-                    except Exception:
-                        pass
+                    if not allow_manual_auth:
+                        self._log(
+                            log_callback,
+                            investigation_id,
+                            "Login is available, but this unattended job will continue with public pages only.",
+                            "INFO",
+                        )
+                    else:
+                        self._log(
+                            log_callback,
+                            investigation_id,
+                            f"🔑 Manual Login Required! Please log in in the browser window on screen...",
+                            "WARNING",
+                        )
+                        try:
+                            await self.page.bring_to_front()
+                        except Exception:
+                            pass
 
-                    self.pause_for_auth = True
-                    if auth_callback:
-                        auth_callback()
-                    self.auth_resumed.clear()
+                        self.pause_for_auth = True
+                        if auth_callback:
+                            auth_callback()
+                        self.auth_resumed.clear()
 
-                    while self.pause_for_auth and not self.stop_requested:
-                        if self.auth_resumed.is_set():
-                            self._log(
-                                log_callback,
-                                investigation_id,
-                                "Verifying manual login state before resuming...",
-                                "INFO",
-                            )
-                            try:
-                                if not await self.check_login_required(
-                                    self.page, await self.page.content(), self.page.url
-                                ):
-                                    self._log(
-                                        log_callback,
-                                        investigation_id,
-                                        f"✅ Manual login strictly verified! Resuming crawl...",
-                                        "INFO",
-                                    )
-                                    self.pause_for_auth = False
-                                    break
-                                else:
-                                    self._log(
-                                        log_callback,
-                                        investigation_id,
-                                        f"❌ Manual login failed! Form still present. Please log in.",
-                                        "WARNING",
-                                    )
-                                    self.auth_resumed.clear()  # Block resumption and pause again
-                            except Exception:
-                                pass
-                        await asyncio.sleep(1)
+                        while self.pause_for_auth and not self.stop_requested:
+                            if self.auth_resumed.is_set():
+                                self._log(
+                                    log_callback,
+                                    investigation_id,
+                                    "Verifying manual login state before resuming...",
+                                    "INFO",
+                                )
+                                try:
+                                    if not await self.check_login_required(
+                                        self.page, await self.get_stable_page_content(), self.page.url
+                                    ):
+                                        self._log(
+                                            log_callback,
+                                            investigation_id,
+                                            f"✅ Manual login strictly verified! Resuming crawl...",
+                                            "INFO",
+                                        )
+                                        self.pause_for_auth = False
+                                        break
+                                    else:
+                                        self._log(
+                                            log_callback,
+                                            investigation_id,
+                                            f"❌ Manual login failed! Form still present. Please log in.",
+                                            "WARNING",
+                                        )
+                                        self.auth_resumed.clear()  # Block resumption and pause again
+                                except Exception:
+                                    pass
+                            await asyncio.sleep(1)
 
             login_completed = True
             self._log(
@@ -601,7 +633,7 @@ class PlaywrightInvestigationEngine:
                 pass
 
             homepage_url = target_url
-            homepage_html = await self.page.content()
+            homepage_html = await self.get_stable_page_content()
 
             # Add homepage as initial target
             queue.append(
@@ -663,10 +695,10 @@ class PlaywrightInvestigationEngine:
                     await self.scroll_page(max_scroll_px=2000)
 
                     page_title = await self.page.title() or page_url
-                    page_html = await self.page.content()
+                    page_html = await self.get_stable_page_content()
 
                     # --- MID-CRAWL SECURITY GUARD ---
-                    if login_completed:
+                    if login_completed and allow_manual_auth:
                         if await self.check_login_required(
                             self.page, page_html, page_url
                         ):
@@ -686,7 +718,7 @@ class PlaywrightInvestigationEngine:
                                     try:
                                         if not await self.check_login_required(
                                             self.page,
-                                            await self.page.content(),
+                                            await self.get_stable_page_content(),
                                             self.page.url,
                                         ):
                                             self._log(
@@ -697,7 +729,7 @@ class PlaywrightInvestigationEngine:
                                             )
                                             self.pause_for_auth = False
                                             page_html = (
-                                                await self.page.content()
+                                                await self.get_stable_page_content()
                                             )  # Refresh HTML after login
                                             break
                                         else:
@@ -782,7 +814,7 @@ class PlaywrightInvestigationEngine:
                                         logger.debug(f"Amount submit error: {sub_err}")
 
                                 page_url = self.page.url
-                                page_html = await self.page.content()
+                                page_html = await self.get_stable_page_content()
                                 page_title = (
                                     await self.page.title() or "Deposit Payment Page"
                                 )

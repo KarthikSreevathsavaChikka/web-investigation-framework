@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Daily Work Log - 27 August 2026</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.5; }
+    h1 { color: #17365d; font-size: 22pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 15pt; margin-top: 18pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    .date { color: #5b6573; font-size: 12pt; margin-bottom: 20pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .result { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    li { margin-bottom: 6pt; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+  </style>
+</head>
+<body>
+  <h1>Daily Work Log</h1>
+  <p class="date"><strong>Date:</strong> 27 August 2026</p>
+
+  <div class="summary">
+    <strong>Objective:</strong> Stabilize the PostgreSQL deployment and advance the Web Investigation Framework from a containerized application into a FastAPI-based, queued microservice architecture with a single Streamlit user interface.
+  </div>
+
+  <h2>Work Completed</h2>
+  <ol>
+    <li>Corrected PostgreSQL upsert queries by adding explicit conflict columns for OSINT cache, candidate, query-execution and traffic-cache tables.</li>
+    <li>Corrected OSINT result queries that relied on SQLite grouping behavior and made them PostgreSQL compatible.</li>
+    <li>Improved the resolved-domain table by adding analyst-friendly explanations for HTTP response codes such as 200, 403 and redirects.</li>
+    <li>Clarified that HTTP 403 can indicate an active server that blocks automated access, location or user requests.</li>
+    <li>Expanded betting and gambling evidence vocabulary and ensured target or brand terms remain central to evidence relevance.</li>
+    <li>Updated evidence capture to save baseline screenshots even when configured evidence keywords are not found.</li>
+    <li>Separated evidence-found, baseline-captured, manual-review and failed-page outcomes.</li>
+    <li>Added the first independent FastAPI service running with Uvicorn on port 8000.</li>
+    <li>Added versioned health, readiness and investigation-read endpoints with automatic Swagger and ReDoc documentation.</li>
+    <li>Added a dedicated API Dockerfile and API-specific dependency file.</li>
+    <li>Added Redis as a persistent job-queue service.</li>
+    <li>Added a separate background worker container for OSINT and Dynamic Playwright investigations.</li>
+    <li>Added PostgreSQL-backed job records with queued, running, completed and failed states.</li>
+    <li>Added job acknowledgement, unacknowledged-job recovery and a worker heartbeat health check.</li>
+    <li>Added FastAPI endpoints for submitting OSINT and Dynamic jobs and reading job status.</li>
+    <li>Connected the Streamlit UI to FastAPI so investigation buttons now submit queued jobs rather than running orchestrators inside Streamlit.</li>
+    <li>Added lightweight two-second Streamlit fragments for live job-status updates without blocking the full interface.</li>
+    <li>Preserved OSINT target-resolution provenance when transferring jobs from Streamlit to the worker.</li>
+    <li>Verified the complete Streamlit → FastAPI/Uvicorn → Redis → Worker → PostgreSQL workflow.</li>
+  </ol>
+
+  <h2>Architecture Achieved</h2>
+  <table>
+    <tr><th>Service</th><th>Responsibility</th></tr>
+    <tr><td>Streamlit application</td><td>Single user interface, target selection, job submission and result dashboards</td></tr>
+    <tr><td>FastAPI with Uvicorn</td><td>Versioned HTTP API, validation, job creation, health checks and OpenAPI documentation</td></tr>
+    <tr><td>Redis</td><td>Transport for pending and claimed investigation jobs</td></tr>
+    <tr><td>Investigation worker</td><td>Background OSINT and Dynamic Playwright execution</td></tr>
+    <tr><td>PostgreSQL</td><td>Shared investigation results, job status and framework persistence</td></tr>
+  </table>
+
+  <h2>API Endpoints Added</h2>
+  <ul>
+    <li><code>GET /health/live</code> and <code>GET /health/ready</code></li>
+    <li><code>GET /api/v1/investigations</code></li>
+    <li><code>GET /api/v1/investigations/{component}/{investigation_id}</code></li>
+    <li><code>POST /api/v1/jobs/osint</code></li>
+    <li><code>POST /api/v1/jobs/dynamic</code></li>
+    <li><code>GET /api/v1/jobs</code> and <code>GET /api/v1/jobs/{job_id}</code></li>
+  </ul>
+
+  <h2>Commits Created</h2>
+  <ul>
+    <li><code>1113a93</code> — fix: specify PostgreSQL upsert conflict keys</li>
+    <li><code>7026876</code> — fix: make OSINT result grouping PostgreSQL compatible</li>
+    <li><code>680b22f</code> — feat: explain HTTP statuses in domain table</li>
+    <li><code>9d15d52</code> — feat: capture target baselines without keyword matches</li>
+    <li><code>9fe9d6c</code> — feat: add FastAPI investigation service</li>
+    <li><code>39f3a79</code> — feat: add queued investigation worker</li>
+    <li><code>5e8724f</code> — feat: route Streamlit investigations through job API</li>
+  </ul>
+
+  <h2>Testing and Verification</h2>
+  <ul>
+    <li>Verified PostgreSQL compatibility fixes against the running containerized database.</li>
+    <li>Verified FastAPI health, readiness, investigation, job and OpenAPI endpoints.</li>
+    <li>Verified Redis-to-worker-to-PostgreSQL job delivery and controlled failure recording.</li>
+    <li>Verified Streamlit-to-FastAPI internal container connectivity.</li>
+    <li>Rendered the updated Streamlit interface in a headless browser without runtime errors.</li>
+    <li>Completed 76 automated tests: 71 application/UI tests and 5 FastAPI tests.</li>
+    <li>Confirmed all five Docker services were healthy.</li>
+  </ul>
+
+  <h2>Important Decisions</h2>
+  <ul>
+    <li>Keep the original <code>Web-Investigator</code> repository unchanged as the reference version.</li>
+    <li>Run long investigations in workers rather than inside FastAPI request processes or Streamlit reruns.</li>
+    <li>Require explicit authorization confirmation in both Streamlit and FastAPI requests.</li>
+    <li>Keep interactive login and queued-job cancellation disabled until secure worker APIs are designed for them.</li>
+  </ul>
+
+  <h2>End-of-Day Status</h2>
+  <div class="result">
+    <strong>Completed:</strong> PostgreSQL stabilization, evidence improvements, FastAPI/Uvicorn service, Redis queue, independent worker and Streamlit-to-job-API integration.<br>
+    <strong>Current architecture:</strong> Streamlit → FastAPI/Uvicorn → Redis → Worker → PostgreSQL.<br>
+    <strong>Next:</strong> Add secure job cancellation, retry policies, authentication/authorization roles, observability and deployment hardening.
+  </div>
+</body>
+</html>

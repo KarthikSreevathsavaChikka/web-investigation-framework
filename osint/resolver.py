@@ -37,6 +37,7 @@ class TargetResolver:
     EXCLUDED_DOMAINS = {
         "facebook.com", "instagram.com", "linkedin.com", "reddit.com", "t.me",
         "twitter.com", "x.com", "youtube.com", "wikipedia.org",
+        "bing.com", "duckduckgo.com", "google.com", "google.co.in", "search.google",
     }
 
     @staticmethod
@@ -83,7 +84,7 @@ class TargetResolver:
             )
         results = []
         provider_errors = []
-        request_delay = max(0.0, min(float(os.getenv("OSINT_SEARCH_REQUEST_DELAY", "1.5")), 5.0))
+        request_delay = max(0.0, min(float(os.getenv("OSINT_RESOLUTION_REQUEST_DELAY", "0")), 5.0))
         compact_brand = re.sub(r"[^a-zA-Z0-9]", "", normalized_input)
         for index, template in enumerate(self.DISCOVERY_QUERIES, start=1):
             query = template.format(brand=normalized_input, compact_brand=compact_brand)

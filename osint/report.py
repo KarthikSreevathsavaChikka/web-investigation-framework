@@ -24,6 +24,7 @@ class OSINTReportBuilder:
         candidates = self.repository.get_candidates(investigation_id)
         candidate_leads = self.repository.get_candidate_leads(investigation_id)
         identities = self.repository.get_search_identities(investigation_id)
+        social_findings = self.repository.get_social_findings(investigation_id)
         sources = self.repository.get_sources(investigation_id)
         documents = self.repository.get_documents(investigation_id)
         queries = self.repository.get_queries(investigation_id)
@@ -35,10 +36,15 @@ class OSINTReportBuilder:
         page_captures = self.repository.get_page_captures(investigation_id)
         rejected_search = self.repository.get_rejected_search_results(investigation_id)
         summary = self.repository.get_summary_counts(investigation_id)
-        manual_links = [item for item in observations if item.get("entity_type") == "MANUAL_REVIEW_LINK"]
+        automated_platforms = {item["platform"] for item in social_findings}
+        manual_links = [
+            item for item in observations
+            if item.get("entity_type") == "MANUAL_REVIEW_LINK"
+            and item.get("value") not in automated_platforms
+        ]
         report_observations = [
             item for item in observations
-            if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "ACCESS_STATUS", "CANDIDATE_DOMAIN"}
+            if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "SEARCH_PROVIDER_ERROR", "ACCESS_STATUS", "CANDIDATE_DOMAIN", "AUTOMATED_SOCIAL_FINDING"}
             and not (
                 item.get("entity_type") in {"SEARCH_SNIPPET_EVIDENCE", "PUBLIC_PAGE_EVIDENCE"}
                 and item.get("target_keyword_distance") is None
@@ -123,6 +129,30 @@ class OSINTReportBuilder:
                     )
             return "".join(cards) or "<p>No document page screenshots were captured.</p>"
 
+        def social_capture_cards(items: list[dict]) -> str:
+            grouped: dict[str, list[dict]] = {}
+            for item in items:
+                for screenshot_path in item.get("screenshot_paths") or []:
+                    grouped.setdefault(screenshot_path, []).append(item)
+            cards = []
+            for screenshot_path, findings in grouped.items():
+                screenshot = Path(screenshot_path)
+                if not screenshot.is_file():
+                    continue
+                encoded = base64.b64encode(screenshot.read_bytes()).decode("ascii")
+                posts = "".join(
+                    f'<p><a href="{escape(str(item.get("post_url") or ""), quote=True)}">Open post</a><br>'
+                    f'{escape(clean_evidence_text(item.get("post_text") or item.get("title"), limit=2_000))}</p>'
+                    for item in findings
+                )
+                cards.append(
+                    '<section class="evidence">'
+                    f'<h3>{escape(str(findings[0].get("platform") or "Platform"))} capture</h3>'
+                    f'{posts}<img src="data:image/png;base64,{encoded}" alt="Authenticated social-media screenshot">'
+                    '</section>'
+                )
+            return "".join(cards) or "<p>No authenticated social-media screenshots were captured.</p>"
+
         return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>OSINT report {escape(investigation_id)}</title>
 <style>
@@ -161,6 +191,8 @@ th{{background:#eef4f7}} .summary{{display:grid;grid-template-columns:repeat(3,1
 <h2>5. Evidence screenshots</h2>{evidence_cards(evidence)}
 <h2>Page capture status</h2>{table(page_captures, ['source_type', 'source_url', 'http_status', 'accessibility_status', 'failure_reason', 'captured_at'])}
 <h2>Collector status</h2>{table(collector_runs, ['collector', 'status', 'duration_seconds', 'observation_count', 'error'])}
+<h2>Automated social and review findings</h2>{table(social_findings, ['platform', 'title', 'post_text', 'confidence', 'query_id', 'search_engine', 'search_rank', 'status', 'post_url', 'collected_at'])}
+<h2>Social and review screenshots</h2>{social_capture_cards(social_findings)}
 <h2>Rejected search noise (diagnostics)</h2>{table(rejected_search, ['query_id', 'provider', 'search_rank', 'title', 'source_url', 'relevance_reason', 'discovered_at'])}
 <h2>Manual social/review links</h2>{table(manual_links, ['query_id', 'value', 'source_url', 'metadata_json', 'discovered_at'])}
 <h2>Public documents</h2>{table(documents, ['document_type', 'source_url', 'final_url', 'matched_target_variant', 'matched_keywords', 'relevant_pages', 'evidence_context', 'sha256', 'size_bytes', 'discovered_at'])}

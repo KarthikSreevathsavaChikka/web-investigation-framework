@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import hashlib
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 from osint.models import NormalizedTarget
@@ -21,6 +22,7 @@ class DocumentAssessment:
     relevant_pages: tuple[int, ...] = ()
     evidence_context: str = ""
     reason: str = ""
+    page_count: int = 0
 
 
 DOCUMENT_CATEGORIES = (
@@ -58,6 +60,41 @@ def assess_pdf(content: bytes, target: NormalizedTarget, evidence_keywords: list
     pages = extract_pdf_pages(content)
     if not pages:
         return DocumentAssessment(False, reason="PDF text could not be extracted; manual review required")
+    return assess_document_pages(pages, target, evidence_keywords)
+
+
+def extract_docx_text(content: bytes) -> list[str]:
+    """Extract paragraphs and table cells from a bounded DOCX payload."""
+    try:
+        from docx import Document
+
+        document = Document(BytesIO(content))
+    except Exception:
+        return []
+    blocks = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+    for table in document.tables:
+        for row in table.rows:
+            blocks.extend(cell.text for cell in row.cells if cell.text.strip())
+    return ["\n".join(blocks)] if blocks else []
+
+
+def assess_docx(
+    content: bytes,
+    target: NormalizedTarget,
+    evidence_keywords: list[str] | tuple[str, ...],
+) -> DocumentAssessment:
+    pages = extract_docx_text(content)
+    if not pages:
+        return DocumentAssessment(False, reason="DOCX text could not be extracted; manual review required")
+    return assess_document_pages(pages, target, evidence_keywords)
+
+
+def assess_document_pages(
+    pages: list[str],
+    target: NormalizedTarget,
+    evidence_keywords: list[str] | tuple[str, ...],
+) -> DocumentAssessment:
+    """Apply the same target and evidence checks to any extracted document text."""
     variants = build_target_variants(target)
     target_hits = [(number, find_target_reference(text, variants)) for number, text in enumerate(pages, 1)]
     target_hits = [(number, variant) for number, variant in target_hits if variant]
@@ -97,6 +134,7 @@ def assess_pdf(content: bytes, target: NormalizedTarget, evidence_keywords: list
             relevant_pages=(first_page,),
             evidence_context=clean_evidence_text(f"Page {first_page}: {context}", limit=12_000),
             reason="Verified target reference; no configured evidence term occurred within the proximity limit",
+            page_count=len(pages),
         )
     return DocumentAssessment(
         True,
@@ -106,31 +144,45 @@ def assess_pdf(content: bytes, target: NormalizedTarget, evidence_keywords: list
         relevant_pages=tuple(sorted({item[0] for item in matches} or {target_hits[0][0]})),
         evidence_context=clean_evidence_text("\n\n".join(contexts), limit=12_000),
         reason="Verified target reference and target-specific document evidence",
+        page_count=len(pages),
     )
 
 
 def render_pdf_pages(pdf_path: str | Path, page_numbers: tuple[int, ...], output_dir: str | Path) -> list[dict]:
-    """Render bounded relevant PDF pages for provenance screenshots."""
+    """Render every requested PDF page in one Poppler invocation."""
     executable = shutil.which("pdftoppm")
     if not executable:
         return []
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
+    requested = tuple(sorted({number for number in page_numbers if number > 0}))
+    if not requested:
+        return []
+    prefix = destination / "page"
+    completed = subprocess.run(
+        [
+            executable, "-f", str(requested[0]), "-l", str(requested[-1]),
+            "-png", "-r", "144", str(pdf_path), str(prefix),
+        ],
+        capture_output=True,
+        check=False,
+        timeout=max(30, len(requested) * 10),
+    )
     captures = []
-    for page_number in page_numbers[:5]:
-        prefix = destination / f"page_{page_number:04d}"
-        completed = subprocess.run(
-            [executable, "-f", str(page_number), "-l", str(page_number), "-singlefile", "-png", "-r", "144", str(pdf_path), str(prefix)],
-            capture_output=True,
-            check=False,
-            timeout=30,
-        )
-        image_path = prefix.with_suffix(".png")
-        if completed.returncode == 0 and image_path.is_file():
-            content = image_path.read_bytes()
-            captures.append({
-                "page": page_number,
-                "path": str(image_path),
-                "sha256": hashlib.sha256(content).hexdigest(),
-            })
+    if completed.returncode != 0:
+        return captures
+    requested_set = set(requested)
+    for image_path in sorted(destination.glob("page-*.png")):
+        try:
+            page_number = int(image_path.stem.rsplit("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if page_number not in requested_set:
+            continue
+        content = image_path.read_bytes()
+        captures.append({
+            "page": page_number,
+            "path": str(image_path),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        })
     return captures

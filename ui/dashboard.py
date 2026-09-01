@@ -7,7 +7,8 @@ from PIL import Image
 
 from database.db_manager import DatabaseManager
 from ui.components import render_metric_card, render_priority_badge, render_bounding_legend
-from config import DB_PATH, CATEGORY_COLORS_HEX
+from config import CATEGORY_COLORS_HEX
+from database.connection import is_postgresql_enabled
 
 def render_dashboard(db: DatabaseManager, investigation_id: str):
     """Step 12: Renders full Evidence Investigation Dashboard for a completed or stopped investigation."""
@@ -173,7 +174,8 @@ def render_dashboard(db: DatabaseManager, investigation_id: str):
     # TAB 4: DATABASE INSPECTOR
     with tab_db:
         st.markdown("### 🗄️ SQLite Database Inspector")
-        st.caption(f"Direct connection to SQLite Database file: `{DB_PATH}`")
+        backend = "PostgreSQL" if is_postgresql_enabled() else "SQLite (local/test mode)"
+        st.caption(f"Database inspector connected to: `{backend}`")
         
         tables = ["investigations", "pages", "keyword_findings", "screenshots", "payment_findings", "navigation_graph", "crawl_logs"]
         selected_table = st.selectbox("Select Table to View Raw Data:", tables)

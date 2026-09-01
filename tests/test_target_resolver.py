@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock
 
 from osint.models import NormalizedTarget, SearchResult
 from osint.relevance import assess_serp_result, assess_page_relevance, target_keyword_proximity, build_target_variants
@@ -72,6 +73,14 @@ class TargetResolverTests(unittest.TestCase):
         self.assertEqual(resolution.candidates[0].domain, "examplebet.com")
         self.assertGreater(resolution.candidates[0].confidence, 0.7)
 
+    def test_search_engine_domains_cannot_become_target_candidates(self):
+        results = [
+            SearchResult("R", "1xbet", "fake", 1, "1xbet official help", "https://support.google.com/chrome", "Official 1xbet app"),
+            SearchResult("R", "1xbet", "fake", 2, "1xbet official", "https://1xbet.com", "Official betting"),
+        ]
+        candidates = TargetResolver().rank_candidates("1xbet", results)
+        self.assertEqual([item.domain for item in candidates], ["1xbet.com"])
+
     def test_resolution_is_not_truncated_to_eight_candidates(self):
         results = [
             SearchResult("R", "ExampleBet", "fake", index, "ExampleBet official site", f"https://examplebet-{index}.test", "Official betting")
@@ -82,11 +91,52 @@ class TargetResolverTests(unittest.TestCase):
     def test_aggregates_distinct_domains_from_all_available_providers(self):
         first = StaticSearchProvider("first", [("ExampleBet", "https://examplebet.com", "Official")])
         second = StaticSearchProvider("second", [
-            ("ExampleBet", "https://examplebet.com", "Official"),
+            ("ExampleBet", "https://examplebet.com/?utm_source=second", "Official"),
             ("ExampleBet India", "https://examplebet-india.com", "Official betting"),
         ])
         results = AggregatingSearchProvider([first, second]).search("ExampleBet", query_id="R", count=20)
         self.assertEqual({item.url for item in results}, {"https://examplebet.com", "https://examplebet-india.com"})
+
+    def test_aggregator_records_each_provider_outcome_when_one_fails(self):
+        successful = StaticSearchProvider(
+            "successful",
+            [("ExampleBet", "https://examplebet.com", "Official")],
+        )
+        provider = AggregatingSearchProvider([successful, RateLimitedSearchProvider()])
+
+        results = provider.search("ExampleBet", query_id="R", count=20)
+        reports = provider.execution_reports("R")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            [(item.provider, item.status) for item in reports],
+            [("successful", "completed"), ("rate_limited", "failed")],
+        )
+        self.assertIn("rate-limited", reports[1].error)
+
+    def test_aggregator_skips_a_provider_after_its_first_failure(self):
+        successful = StaticSearchProvider(
+            "successful",
+            [("ExampleBet", "https://examplebet.com", "Official")],
+        )
+        failed = RateLimitedSearchProvider()
+        failed.search = Mock(side_effect=RuntimeError("timed out"))
+        provider = AggregatingSearchProvider([successful, failed])
+
+        provider.search("ExampleBet", query_id="R1", count=20)
+        provider.search("ExampleBet official", query_id="R2", count=20)
+
+        self.assertEqual(failed.search.call_count, 1)
+        second_reports = provider.execution_reports("R2")
+        self.assertIn("Skipped after an earlier provider failure", second_reports[1].error)
+
+    def test_aggregator_distinguishes_all_failed_from_no_results(self):
+        provider = AggregatingSearchProvider([RateLimitedSearchProvider()])
+
+        with self.assertRaisesRegex(RuntimeError, "rate_limited"):
+            provider.search("ExampleBet", query_id="R", count=20)
+
+        self.assertEqual(provider.execution_reports("R")[0].status, "failed")
 
     def test_rejects_fuzzy_unrelated_domain_candidates(self):
         results = [

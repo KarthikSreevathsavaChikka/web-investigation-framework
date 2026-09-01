@@ -1,0 +1,104 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-web_investigator}
+      POSTGRES_USER: ${POSTGRES_USER:-investigator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
+      API_BASE_URL: http://api:8000
+      HEADLESS: "true"
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data/browser_sessions:/app/data/browser_sessions:ro
+      - screenshots_data:/app/screenshots
+      - evidence_data:/app/evidence
+      - reports_data:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "services.jobs.worker"]
+    group_add:
+      - "${LOCAL_GID:-1000}"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
+      REDIS_URL: redis://redis:6379/0
+      HEADLESS: "true"
+      OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS: ${OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS:-60}
+    volumes:
+      - ./data/browser_sessions:/app/data/browser_sessions:ro
+      - screenshots_data:/app/screenshots
+      - evidence_data:/app/evidence
+      - reports_data:/app/reports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; from redis import Redis; assert Redis.from_url(os.environ['REDIS_URL'], decode_responses=True).get('web-investigator:worker:heartbeat') == 'ready'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  screenshots_data:
+  evidence_data:
+  reports_data:

@@ -4,7 +4,6 @@ import os
 import time
 import hashlib
 import json
-import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -13,8 +12,9 @@ from bs4 import BeautifulSoup
 from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 from xml.etree import ElementTree
 
-from config import DB_PATH
+from database.connection import connect_database
 from osint.models import SearchResult
+from osint.url_tools import normalize_result_url
 
 
 @dataclass(frozen=True)
@@ -55,13 +55,27 @@ class SearchProvider(ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class SearchProviderExecution:
+    """Auditable outcome of one provider participating in an aggregated query."""
+
+    query_id: str
+    provider: str
+    status: str
+    results: tuple[SearchResult, ...] = ()
+    error: str | None = None
+
+
 class AggregatingSearchProvider(SearchProvider):
     """Query every available provider and merge their distinct result URLs."""
 
     name = "aggregated"
 
-    def __init__(self, providers: list[SearchProvider]):
+    def __init__(self, providers: list[SearchProvider], *, name: str | None = None):
         self.providers = [provider for provider in providers if provider.available]
+        self.name = name or type(self).name
+        self._executions: dict[str, tuple[SearchProviderExecution, ...]] = {}
+        self._failed_providers: set[str] = set()
 
     @property
     def available(self) -> bool:
@@ -70,21 +84,63 @@ class AggregatingSearchProvider(SearchProvider):
     def search(self, query: str, *, query_id: str, count: int) -> list[SearchResult]:
         merged: list[SearchResult] = []
         seen: set[str] = set()
-        errors: list[str] = []
+        executions: list[SearchProviderExecution] = []
         for provider in self.providers:
+            if provider.name in self._failed_providers:
+                executions.append(SearchProviderExecution(
+                    query_id=query_id,
+                    provider=provider.name,
+                    status="failed",
+                    error="Skipped after an earlier provider failure in this search batch",
+                ))
+                continue
             try:
                 results = provider.search(query, query_id=query_id, count=count)
             except Exception as exc:
-                errors.append(f"{provider.name}: {exc}")
+                self._failed_providers.add(provider.name)
+                executions.append(SearchProviderExecution(
+                    query_id=query_id,
+                    provider=provider.name,
+                    status="failed",
+                    error=str(exc),
+                ))
                 continue
+            executions.append(SearchProviderExecution(
+                query_id=query_id,
+                provider=provider.name,
+                status="completed",
+                results=tuple(results),
+            ))
             for result in results:
-                normalized = result.url.casefold().rstrip("/")
+                try:
+                    normalized = normalize_result_url(result.url)
+                except ValueError:
+                    continue
                 if normalized not in seen:
                     merged.append(result)
                     seen.add(normalized)
-        if not merged and errors:
+        self._executions[query_id] = tuple(executions)
+        errors = [f"{item.provider}: {item.error}" for item in executions if item.status == "failed"]
+        if executions and len(errors) == len(executions):
             raise RuntimeError("; ".join(errors))
         return merged
+
+    def execution_reports(self, query_id: str) -> tuple[SearchProviderExecution, ...]:
+        return self._executions.get(query_id, ())
+
+    def capabilities_for(self, provider_name: str) -> SearchProviderCapabilities:
+        provider = next((item for item in self.providers if item.name == provider_name), None)
+        return provider.capabilities if provider else self.capabilities
+
+
+def build_keyless_search_provider() -> AggregatingSearchProvider:
+    """Create the standard keyless provider group used across resolution and discovery."""
+
+    timeout = max(1, min(int(os.getenv("OSINT_KEYLESS_SEARCH_TIMEOUT", "3")), 15))
+    return AggregatingSearchProvider(
+        [BingRSSSearchProvider(timeout=timeout), DuckDuckGoSearchProvider(timeout=timeout)],
+        name="keyless_aggregated",
+    )
 
 
 class BraveSearchProvider(SearchProvider):
@@ -143,7 +199,7 @@ class BraveSearchProvider(SearchProvider):
 
     @staticmethod
     def _init_cache() -> None:
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS osint_search_cache (
                     cache_key TEXT PRIMARY KEY, provider TEXT NOT NULL,
@@ -154,7 +210,7 @@ class BraveSearchProvider(SearchProvider):
     def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
         if not self.cache_ttl:
             return None
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             row = connection.execute(
                 "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
                 (self._cache_key(query, count),),
@@ -170,7 +226,7 @@ class BraveSearchProvider(SearchProvider):
             "search_engine": item.search_engine, "rank": item.rank, "title": item.title,
             "url": item.url, "snippet": item.snippet,
         } for item in results]
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO osint_search_cache (cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),
@@ -283,7 +339,7 @@ class GoogleSearchProvider(SearchProvider):
     def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
         if not self.cache_ttl:
             return None
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             row = connection.execute(
                 "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
                 (self._cache_key(query, count),),
@@ -292,7 +348,7 @@ class GoogleSearchProvider(SearchProvider):
             return None
         payload = json.loads(row[0])
         if not payload:
-            with sqlite3.connect(str(DB_PATH)) as connection:
+            with connect_database() as connection:
                 connection.execute("DELETE FROM osint_search_cache WHERE cache_key = ?", (self._cache_key(query, count),))
             return None
         return [SearchResult(query_id=query_id, query_text=query, **item) for item in payload]
@@ -304,7 +360,7 @@ class GoogleSearchProvider(SearchProvider):
             "search_engine": item.search_engine, "rank": item.rank, "title": item.title,
             "url": item.url, "snippet": item.snippet,
         } for item in results]
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO osint_search_cache (cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),
@@ -381,7 +437,7 @@ class DuckDuckGoSearchProvider(SearchProvider):
     def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
         if not self.cache_ttl:
             return None
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             row = connection.execute(
                 "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
                 (self._cache_key(query, count),),
@@ -400,7 +456,7 @@ class DuckDuckGoSearchProvider(SearchProvider):
             }
             for item in results
         ]
-        with sqlite3.connect(str(DB_PATH)) as connection:
+        with connect_database() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO osint_search_cache (cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
                 (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),

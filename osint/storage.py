@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from config import DB_PATH
+from database.connection import connect_database, is_postgresql_connection
+from database.migrations import lock_schema_migration, record_schema_version, schema_version_exists
 from osint.models import (
     CollectorResult,
     DorkQuery,
@@ -25,18 +25,18 @@ def utc_now() -> str:
 
 
 class OSINTRepository:
-    def __init__(self, db_path: Path | str = DB_PATH):
-        self.db_path = str(db_path)
+    def __init__(self, db_path: Path | str | None = None):
+        self.db_path = str(db_path) if db_path is not None else None
         self.init_schema()
 
     def connection(self):
-        connection = sqlite3.connect(self.db_path)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        return connection
+        return connect_database(self.db_path)
 
     def init_schema(self) -> None:
         with self.connection() as connection:
+            lock_schema_migration(connection)
+            if is_postgresql_connection(connection) and schema_version_exists(connection, "osint", 2):
+                return
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS osint_investigations (
@@ -260,6 +260,45 @@ class OSINTRepository:
                     UNIQUE(evidence_match_id, sha256),
                     FOREIGN KEY (evidence_match_id) REFERENCES osint_evidence_matches(id)
                 );
+
+                CREATE TABLE IF NOT EXISTS osint_document_page_captures (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    investigation_id TEXT NOT NULL,
+                    source_id INTEGER NOT NULL,
+                    query_id TEXT NOT NULL,
+                    query_name TEXT,
+                    search_engine TEXT,
+                    source_url TEXT NOT NULL,
+                    final_url TEXT,
+                    page_number INTEGER NOT NULL,
+                    screenshot_path TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    captured_at TEXT NOT NULL,
+                    UNIQUE(investigation_id, source_id, query_id, page_number, sha256),
+                    FOREIGN KEY (investigation_id) REFERENCES osint_investigations(id),
+                    FOREIGN KEY (source_id) REFERENCES osint_sources(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS osint_social_findings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    investigation_id TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    post_url TEXT NOT NULL,
+                    normalized_post_url TEXT NOT NULL,
+                    title TEXT,
+                    post_text TEXT,
+                    matched_target TEXT,
+                    confidence REAL NOT NULL,
+                    collector_method TEXT NOT NULL,
+                    query_id TEXT,
+                    search_engine TEXT,
+                    search_rank INTEGER,
+                    status TEXT NOT NULL,
+                    screenshot_paths_json TEXT DEFAULT '[]',
+                    collected_at TEXT NOT NULL,
+                    UNIQUE(investigation_id, normalized_post_url),
+                    FOREIGN KEY (investigation_id) REFERENCES osint_investigations(id)
+                );
                 """
             )
 
@@ -290,7 +329,12 @@ class OSINTRepository:
             self._ensure_column(connection, "osint_documents", "evidence_context", "TEXT")
             self._ensure_column(connection, "osint_documents", "relevance_status", "TEXT DEFAULT 'confirmed_evidence'")
             self._ensure_column(connection, "osint_documents", "page_screenshots_json", "TEXT DEFAULT '[]'")
+            self._ensure_column(connection, "osint_documents", "file_name", "TEXT")
+            self._ensure_column(connection, "osint_documents", "media_type", "TEXT")
+            self._ensure_column(connection, "osint_documents", "content_blob", "BYTEA")
+            self._ensure_column(connection, "osint_documents", "discovery_queries_json", "TEXT DEFAULT '[]'")
             self._ensure_column(connection, "osint_query_executions", "status", "TEXT DEFAULT 'completed'")
+            self._ensure_column(connection, "osint_social_findings", "screenshot_paths_json", "TEXT DEFAULT '[]'")
             for column, definition in (
                 ("domain_status", "TEXT DEFAULT 'Unknown'"), ("detailed_status", "TEXT DEFAULT 'Unknown'"),
                 ("http_status", "TEXT DEFAULT 'Unavailable'"), ("final_url", "TEXT"),
@@ -300,9 +344,13 @@ class OSINTRepository:
                 ("traffic_data_date", "TEXT"),
             ):
                 self._ensure_column(connection, "osint_target_candidates", column, definition)
+            record_schema_version(connection, "osint", 2)
 
     @staticmethod
-    def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    def _ensure_column(connection, table: str, column: str, definition: str) -> None:
+        if is_postgresql_connection(connection):
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+            return
         existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
         if column not in existing:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
@@ -432,12 +480,38 @@ class OSINTRepository:
                 )
                 if observation.entity_type == "SEARCH_RESULT":
                     self._save_search_source(connection, investigation_id, observation)
+                elif observation.entity_type == "AUTOMATED_SOCIAL_FINDING":
+                    self._save_social_finding(connection, investigation_id, observation)
                 elif observation.entity_type == "PUBLIC_DOCUMENT":
                     self._save_document(connection, investigation_id, observation)
 
     @staticmethod
+    def _save_social_finding(connection, investigation_id: str, observation: Observation) -> None:
+        metadata = observation.metadata
+        normalized_url = metadata.get("normalized_url") or observation.source_url
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO osint_social_findings
+            (investigation_id, platform, post_url, normalized_post_url, title, post_text,
+             matched_target, confidence, collector_method, query_id, search_engine,
+             search_rank, status, screenshot_paths_json, collected_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                investigation_id, metadata.get("platform", "Unknown"), observation.source_url,
+                normalized_url, metadata.get("title", observation.value),
+                metadata.get("post_text", metadata.get("snippet", "")),
+                metadata.get("matched_target_variant", ""), observation.confidence,
+                metadata.get("collector_method", observation.collector),
+                metadata.get("query_id", ""), metadata.get("search_engine", observation.collector),
+                int(metadata.get("rank", 0)), metadata.get("status", "collected"),
+                json.dumps(metadata.get("screenshot_paths", [])), utc_now(),
+            ),
+        )
+
+    @staticmethod
     def _save_query_execution(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
@@ -459,7 +533,7 @@ class OSINTRepository:
 
     @staticmethod
     def _save_search_result_audit(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
@@ -487,7 +561,7 @@ class OSINTRepository:
 
     @staticmethod
     def _save_search_source(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
@@ -539,21 +613,27 @@ class OSINTRepository:
 
     @staticmethod
     def _save_document(
-        connection: sqlite3.Connection,
+        connection,
         investigation_id: str,
         observation: Observation,
     ) -> None:
         metadata = observation.metadata
         if not metadata.get("artifact_path") or not metadata.get("sha256"):
             return
+        artifact_path = Path(metadata["artifact_path"])
+        try:
+            content_blob = artifact_path.read_bytes()
+        except OSError:
+            content_blob = None
         connection.execute(
             """
             INSERT OR IGNORE INTO osint_documents
             (investigation_id, source_url, final_url, document_type, local_path,
              sha256, size_bytes, discovered_at, matched_target_variant,
              matched_keywords_json, relevant_pages_json, evidence_context, relevance_status,
-             page_screenshots_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             page_screenshots_json, file_name, media_type, content_blob,
+             discovery_queries_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 investigation_id,
@@ -570,6 +650,10 @@ class OSINTRepository:
                 metadata.get("evidence_context", ""),
                 metadata.get("relevance_status", "confirmed_evidence"),
                 json.dumps(metadata.get("page_screenshots", [])),
+                metadata.get("file_name", artifact_path.name),
+                metadata.get("media_type", "application/octet-stream"),
+                content_blob,
+                json.dumps(metadata.get("discovery_queries", [])),
             ),
         )
 
@@ -598,6 +682,13 @@ class OSINTRepository:
                     )
                     for item in assessment.indicators
                 ],
+            )
+
+    def cancel(self, investigation_id: str) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                "UPDATE osint_investigations SET completed_at = ?, status = 'CANCELLED' WHERE id = ?",
+                (utc_now(), investigation_id),
             )
 
     def list_investigations(self) -> list[dict]:
@@ -719,6 +810,24 @@ class OSINTRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_social_findings(self, investigation_id: str) -> list[dict]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, platform, post_url, title, post_text, matched_target,
+                       confidence, collector_method, query_id, search_engine,
+                       search_rank, status, screenshot_paths_json, collected_at
+                FROM osint_social_findings
+                WHERE investigation_id = ?
+                ORDER BY platform, search_rank, id
+                """,
+                (investigation_id,),
+            ).fetchall()
+        findings = [dict(row) for row in rows]
+        for finding in findings:
+            finding["screenshot_paths"] = json.loads(finding.pop("screenshot_paths_json") or "[]")
+        return findings
+
     def get_sources(self, investigation_id: str) -> list[dict]:
         with self.connection() as connection:
             rows = connection.execute(
@@ -737,6 +846,76 @@ class OSINTRepository:
                 (investigation_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_document_sources(self, investigation_id: str, limit: int = 25) -> list[dict]:
+        """Return accepted document leads across every query, with provenance."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT s.id, s.source_url, s.normalized_url, s.title, s.snippet,
+                       s.source_type, s.first_seen_at, MIN(m.search_rank) AS best_rank
+                FROM osint_sources s
+                LEFT JOIN osint_source_query_map m ON m.source_id = s.id
+                WHERE s.investigation_id = ? AND s.relevance_status = 'accepted'
+                  AND (
+                    s.source_type IN ('pdf_document', 'other_document')
+                    OR EXISTS (
+                      SELECT 1 FROM osint_source_query_map dm
+                      JOIN osint_queries q
+                        ON q.investigation_id = s.investigation_id
+                       AND q.query_id = dm.query_id
+                      WHERE dm.source_id = s.id
+                        AND q.document_type IS NOT NULL AND q.document_type != ''
+                    )
+                  )
+                  AND (
+                    s.source_type IN ('pdf_document', 'other_document')
+                    OR LOWER(COALESCE(s.source_url, '')) LIKE '%%.pdf%%'
+                    OR LOWER(COALESCE(s.source_url, '')) LIKE '%%.docx%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%pdf%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%document%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%certificate%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%licence%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%license%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%pdf%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%document%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%certificate%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%licence%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%license%%'
+                  )
+                GROUP BY s.id
+                ORDER BY best_rank, s.id
+                LIMIT ?
+                """,
+                (investigation_id, max(0, limit)),
+            ).fetchall()
+            items = []
+            for row in rows:
+                item = dict(row)
+                mappings = connection.execute(
+                    """
+                    SELECT m.query_id, m.query_text, m.search_engine, m.search_rank,
+                           COALESCE(q.evidence_keywords_json, '[]') AS evidence_keywords_json
+                    FROM osint_source_query_map m
+                    LEFT JOIN osint_queries q
+                      ON q.investigation_id = ? AND q.query_id = m.query_id
+                    WHERE m.source_id = ?
+                    ORDER BY m.search_rank, m.query_id, m.search_engine
+                    """,
+                    (investigation_id, item["id"]),
+                ).fetchall()
+                item["discovery_queries"] = []
+                for mapping in mappings:
+                    query = dict(mapping)
+                    try:
+                        query["evidence_keywords"] = json.loads(
+                            query.pop("evidence_keywords_json") or "[]"
+                        )
+                    except json.JSONDecodeError:
+                        query["evidence_keywords"] = []
+                    item["discovery_queries"].append(query)
+                items.append(item)
+        return items
 
     def get_evidence_tasks(self, investigation_id: str, limit: int = 8) -> list[dict]:
         """Return deduplicated pages with every SERP query that discovered each page."""
@@ -762,6 +941,7 @@ class OSINTRepository:
                     """
                     SELECT m.query_id, q.name AS query_name, q.category AS query_category,
                            m.search_engine, m.search_rank,
+                           COALESCE(q.document_type, '') AS document_type,
                            COALESCE(q.evidence_keywords_json,
                              '["deposit", "withdrawal", "payment", "wallet", "betting", "casino", "complaint", "licence", "license", "registration", "APK"]'
                            ) AS evidence_keywords_json
@@ -786,6 +966,71 @@ class OSINTRepository:
                 if query_items:
                     task = dict(source)
                     task["queries"] = query_items
+                    tasks.append(task)
+        return tasks
+
+    def get_document_capture_tasks(self, investigation_id: str) -> list[dict]:
+        """Return every accepted target-related result matching a document query and document signal."""
+        with self.connection() as connection:
+            source_rows = connection.execute(
+                """
+                SELECT DISTINCT s.id AS source_id, s.source_url, s.normalized_url,
+                       s.source_type, s.title, s.snippet, 1 AS document_priority,
+                       MIN(m.search_rank) AS best_rank
+                FROM osint_sources s
+                JOIN osint_source_query_map m ON m.source_id = s.id
+                JOIN osint_queries q
+                  ON q.investigation_id = s.investigation_id AND q.query_id = m.query_id
+                WHERE s.investigation_id = ?
+                  AND s.relevance_status = 'accepted'
+                  AND q.document_type IS NOT NULL AND q.document_type != ''
+                  AND (
+                    s.source_type IN ('pdf_document', 'other_document')
+                    OR LOWER(COALESCE(s.source_url, '')) LIKE '%%.pdf%%'
+                    OR LOWER(COALESCE(s.source_url, '')) LIKE '%%.docx%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%pdf%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%document%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%certificate%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%licence%%'
+                    OR LOWER(COALESCE(s.title, '')) LIKE '%%license%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%pdf%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%document%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%certificate%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%licence%%'
+                    OR LOWER(COALESCE(s.snippet, '')) LIKE '%%license%%'
+                  )
+                GROUP BY s.id
+                ORDER BY best_rank, s.id
+                """,
+                (investigation_id,),
+            ).fetchall()
+            tasks = []
+            for source in source_rows:
+                mappings = connection.execute(
+                    """
+                    SELECT m.query_id, q.name AS query_name, q.category AS query_category,
+                           m.search_engine, m.search_rank, q.document_type,
+                           COALESCE(q.evidence_keywords_json, '[]') AS evidence_keywords_json
+                    FROM osint_source_query_map m
+                    JOIN osint_queries q
+                      ON q.investigation_id = ? AND q.query_id = m.query_id
+                    WHERE m.source_id = ?
+                      AND q.document_type IS NOT NULL AND q.document_type != ''
+                    ORDER BY m.search_rank, m.query_id
+                    """,
+                    (investigation_id, source["source_id"]),
+                ).fetchall()
+                queries = []
+                for mapping in mappings:
+                    item = dict(mapping)
+                    try:
+                        item["evidence_keywords"] = json.loads(item.pop("evidence_keywords_json") or "[]")
+                    except json.JSONDecodeError:
+                        item["evidence_keywords"] = []
+                    queries.append(item)
+                if queries:
+                    task = dict(source)
+                    task["queries"] = queries
                     tasks.append(task)
         return tasks
 
@@ -823,6 +1068,10 @@ class OSINTRepository:
                     (capture_id,),
                 )
                 connection.execute("DELETE FROM osint_evidence_matches WHERE page_capture_id = ?", (capture_id,))
+                connection.execute(
+                    "DELETE FROM osint_document_page_captures WHERE investigation_id = ? AND source_id = ?",
+                    (investigation_id, record.source_id),
+                )
                 for evidence in record.screenshots:
                     cursor = connection.execute(
                         """
@@ -850,8 +1099,25 @@ class OSINTRepository:
                         """,
                         (cursor.lastrowid, evidence.screenshot_path, evidence.screenshot_sha256, utc_now()),
                     )
+                    if evidence.match_method == "document_viewer_page" and evidence.document_page_number:
+                        connection.execute(
+                            """
+                            INSERT OR IGNORE INTO osint_document_page_captures
+                            (investigation_id, source_id, query_id, query_name, search_engine,
+                             source_url, final_url, page_number, screenshot_path, sha256, captured_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                investigation_id, record.source_id, evidence.query_id,
+                                evidence.query_name, evidence.search_engine, record.source_url,
+                                record.final_url, evidence.document_page_number,
+                                evidence.screenshot_path, evidence.screenshot_sha256, utc_now(),
+                            ),
+                        )
                 lifecycle_status = {
                     "evidence_found": "confirmed_evidence",
+                    "baseline_captured": "target_baseline",
+                    "document_viewer_captured": "document_viewer_capture",
                     "no_evidence": "no_evidence",
                     "manual_required": "manual_required",
                     "rejected_irrelevant": "rejected_irrelevant",
@@ -898,6 +1164,25 @@ class OSINTRepository:
                     item[target] = []
             items.append(item)
         return items
+
+    def get_document_viewer_captures(self, investigation_id: str) -> list[dict]:
+        """Return screenshots from public HTML document viewers for the Documents tab."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT d.id AS capture_id, d.source_id, d.source_url, d.final_url, p.page_title,
+                       d.query_id, d.query_name, d.search_engine,
+                       d.page_number, ('Public document viewer page ' || d.page_number) AS evidence_text,
+                       d.screenshot_path, d.sha256, d.captured_at
+                FROM osint_document_page_captures d
+                LEFT JOIN osint_page_captures p
+                  ON p.investigation_id = d.investigation_id AND p.source_id = d.source_id
+                WHERE d.investigation_id = ?
+                ORDER BY d.source_id, d.query_id, d.page_number
+                """,
+                (investigation_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_page_captures(self, investigation_id: str) -> list[dict]:
         with self.connection() as connection:
@@ -994,7 +1279,8 @@ class OSINTRepository:
                 LEFT JOIN osint_evidence_matches e ON e.page_capture_id = p.id AND e.query_id = m.query_id
                 LEFT JOIN osint_evidence_screenshots shot ON shot.evidence_match_id = e.id
                 WHERE s.investigation_id = ? AND m.query_id = ?
-                GROUP BY m.id
+                GROUP BY m.id, m.search_rank, s.id, s.title, s.source_url,
+                         s.source_type, p.accessibility_status
                 ORDER BY m.search_rank, s.id
                 """,
                 (investigation_id, query_id),
@@ -1005,10 +1291,11 @@ class OSINTRepository:
         with self.connection() as connection:
             rows = connection.execute(
                 """
-                SELECT source_url, final_url, document_type, local_path, sha256,
+                SELECT id, source_url, final_url, document_type, local_path, sha256,
                        size_bytes, discovered_at, matched_target_variant,
                        matched_keywords_json, relevant_pages_json, evidence_context,
-                       relevance_status, page_screenshots_json
+                       relevance_status, page_screenshots_json, file_name, media_type,
+                       discovery_queries_json
                 FROM osint_documents WHERE investigation_id = ? ORDER BY id
                 """,
                 (investigation_id,),
@@ -1025,8 +1312,22 @@ class OSINTRepository:
                 item["page_screenshots"] = json.loads(item.pop("page_screenshots_json") or "[]")
             except json.JSONDecodeError:
                 item["page_screenshots"] = []
+            try:
+                item["discovery_queries"] = json.loads(item.pop("discovery_queries_json") or "[]")
+            except json.JSONDecodeError:
+                item["discovery_queries"] = []
             documents.append(item)
         return documents
+
+    def get_document_content(self, investigation_id: str, document_id: int) -> bytes | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT content_blob FROM osint_documents WHERE investigation_id = ? AND id = ?",
+                (investigation_id, document_id),
+            ).fetchone()
+        if not row or row["content_blob"] is None:
+            return None
+        return bytes(row["content_blob"])
 
     def add_analyst_note(self, investigation_id: str, note: str) -> None:
         cleaned = note.strip()

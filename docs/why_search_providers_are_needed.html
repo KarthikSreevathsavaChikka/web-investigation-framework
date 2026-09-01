@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Why Search Providers Are Needed</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.45; }
+    h1 { color: #17365d; font-size: 24pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 16pt; margin-top: 20pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    h3 { color: #2f5597; font-size: 12.5pt; margin-top: 14pt; }
+    .subtitle { color: #5b6573; font-size: 12pt; margin-bottom: 22pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .important { background: #fff2cc; border-left: 5px solid #bf9000; padding: 10pt 12pt; margin: 14pt 0; }
+    .recommendation { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    pre { background: #f3f4f6; border: 1px solid #d1d5db; padding: 10pt; font-family: "Courier New", monospace; font-size: 9pt; white-space: pre-wrap; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    tr:nth-child(even) td { background: #f7f9fb; }
+    li { margin-bottom: 5pt; }
+    .footer-note { color: #6b7280; font-size: 9pt; margin-top: 24pt; }
+  </style>
+</head>
+<body>
+  <h1>Why Search Providers Are Needed</h1>
+  <p class="subtitle">Search and public-intelligence discovery in the Web Investigation Framework</p>
+
+  <div class="summary">
+    Search providers help the OSINT component discover public URLs, documents, social profiles, related domains, historical references, and possible evidence sources associated with an investigation target. Multiple providers improve coverage and resilience because no single search index contains every relevant result.
+  </div>
+
+  <h2>1. The Discovery Problem</h2>
+  <p>If an analyst enters a brand such as <code>ExampleBet</code>, the system may not initially know:</p>
+  <ul>
+    <li>The official domain</li>
+    <li>Regional, related, or mirror domains</li>
+    <li>Login, registration, wallet, or payment pages</li>
+    <li>Public reports, complaints, or legal references</li>
+    <li>Documents mentioning the brand</li>
+    <li>Official or related social-media profiles</li>
+  </ul>
+  <p>Search providers supply candidate sources that can be validated by later pipeline stages.</p>
+  <pre>Brand, domain, or URL
+          |
+          v
+Generated OSINT queries
+          |
+   +------+------+------+------+
+   |      |      |      |      |
+ Google  Bing   DDG   Brave  Other sources
+   |      |      |      |      |
+   +------+------+------+------+
+          |
+          v
+Candidate URLs and domains
+          |
+          v
+Relevance and safety validation
+          |
+          v
+Public-page evidence collection</pre>
+
+  <h2>2. Google</h2>
+  <p>Google is useful for discovering official domains, indexed documents, social profiles, login pages, payment pages, and target-specific references.</p>
+  <p>Example queries:</p>
+  <pre>"ExampleBet" official
+site:examplebet.com payment
+"ExampleBet" filetype:pdf
+"ExampleBet" Telegram</pre>
+  <p>The project can use the official Google Custom Search JSON API when credentials are configured. Public HTML search may be used as a best-effort fallback, but it can encounter rate limits, consent pages, CAPTCHAs, or layout changes.</p>
+
+  <h2>3. Bing</h2>
+  <p>The current implementation uses Bing RSS as a keyless discovery source. Bing contributes an independent search index and may return regional, older, or alternative results that are missing from another provider.</p>
+  <p>Its main benefits are basic discovery without a configured API key and fallback availability. Its limitations include fewer results and less metadata than a full commercial search API.</p>
+
+  <h2>4. DuckDuckGo</h2>
+  <p>DuckDuckGo provides another keyless web-discovery source. It helps with fallback discovery and comparison across search providers.</p>
+  <p>The current integration processes public search results rather than relying on a guaranteed commercial API. Consequently, it can be affected by page-layout changes, automated-access restrictions, or rate limits.</p>
+
+  <h2>5. Brave Search</h2>
+  <p>Brave provides an official structured search API when <code>BRAVE_SEARCH_API_KEY</code> is configured.</p>
+  <p>Its advantages include:</p>
+  <ul>
+    <li>Structured titles, URLs, and snippets</li>
+    <li>More predictable parsing</li>
+    <li>Clear API errors and rate-limit handling</li>
+    <li>Greater production reliability than public HTML parsing</li>
+  </ul>
+  <p>The trade-offs are credential management, quotas, and possible usage costs.</p>
+
+  <h2>6. Why Multiple Providers Are Used</h2>
+  <p>No provider guarantees complete coverage. A page indexed by one provider may be absent from another.</p>
+  <table>
+    <tr><th>Possible result</th><th>Google</th><th>Bing</th><th>DuckDuckGo</th><th>Brave</th></tr>
+    <tr><td>Official domain</td><td>Likely</td><td>Likely</td><td>Likely</td><td>Likely</td></tr>
+    <tr><td>Old document</td><td>Possible</td><td>Possible</td><td>Possible</td><td>Possible</td></tr>
+    <tr><td>Regional mirror</td><td>May find</td><td>May find</td><td>May find</td><td>May find</td></tr>
+    <tr><td>Social profile</td><td>May find</td><td>May find</td><td>May find</td><td>May find</td></tr>
+  </table>
+  <p>Combining providers improves:</p>
+  <ul>
+    <li><strong>Coverage:</strong> more candidate URLs and domains</li>
+    <li><strong>Resilience:</strong> investigation can continue when one provider fails</li>
+    <li><strong>Cross-validation:</strong> repeated independent appearances can increase resolution confidence</li>
+    <li><strong>Regional discovery:</strong> providers can differ in geographic indexing</li>
+    <li><strong>Historical discovery:</strong> older sources may remain in only one index</li>
+  </ul>
+
+  <h2>7. Other Public-Intelligence Providers</h2>
+  <h3>Certificate Transparency</h3>
+  <p>Certificate Transparency sources such as <code>crt.sh</code> can reveal certificate hostnames and subdomains, including <code>login.example.com</code>, <code>payments.example.com</code>, or <code>api.example.com</code>. These results are leads and do not prove ownership or malicious activity.</p>
+
+  <h3>Wayback Machine</h3>
+  <p>The Wayback CDX service can discover historical URLs, removed pages, and old login or payment paths. Every historical URL still requires relevance and safety validation.</p>
+
+  <h3>DNS</h3>
+  <p>DNS provides technical infrastructure information such as IP addresses, mail servers, and nameservers.</p>
+
+  <h3>RDAP</h3>
+  <p>RDAP supplies public domain-registration metadata, including registrar, registration dates, nameservers, and domain status.</p>
+
+  <h2>8. Providers Are Optional</h2>
+  <p>Not every provider must be enabled. A future framework configuration could select providers independently:</p>
+  <pre>search_providers:
+  google:
+    enabled: false
+  brave:
+    enabled: true
+  bing_rss:
+    enabled: true
+  duckduckgo:
+    enabled: true</pre>
+
+  <p>A basic keyless configuration could use:</p>
+  <pre>DNS
+RDAP
+Certificate Transparency
+Wayback
+Bing RSS
+DuckDuckGo</pre>
+
+  <p>A more reliable production configuration could use:</p>
+  <pre>DNS
+RDAP
+Certificate Transparency
+Wayback
+Brave Search API
+Google Custom Search API</pre>
+
+  <h2>9. Search Results Are Leads, Not Evidence</h2>
+  <div class="important">
+    A search result must not automatically be treated as verified evidence. Search titles and snippets may be outdated, incomplete, misleading, or unrelated to the target.
+  </div>
+  <p>The required validation flow is:</p>
+  <pre>Search result
+      |
+      v
+Candidate source
+      |
+      v
+Target relevance check
+      |
+      v
+Open and validate public page
+      |
+      v
+Capture target-specific content
+      |
+      v
+Evidence</pre>
+  <p>The system should record provider attribution, search rank, query identity, relevance decisions, page accessibility, and evidence provenance.</p>
+
+  <h2>10. Recommended Production Policy</h2>
+  <div class="recommendation">
+    Prefer official, documented APIs where possible. Use public HTML and keyless providers as best-effort fallback sources rather than the only production search mechanism.
+  </div>
+  <p>Every provider integration should include:</p>
+  <ul>
+    <li>Explicit connection and response timeouts</li>
+    <li>Per-investigation query budgets</li>
+    <li>Rate limiting and controlled retries</li>
+    <li>Result normalization and deduplication</li>
+    <li>Strict target-relevance filtering</li>
+    <li>Provider attribution and query provenance</li>
+    <li>Failure isolation and partial-result handling</li>
+    <li>Secure API-key storage</li>
+    <li>Compliance with provider terms and applicable policies</li>
+  </ul>
+
+  <h2>11. Conclusion</h2>
+  <p>Google, Bing, DuckDuckGo, Brave, and related public-intelligence providers are used to maximize public discovery coverage and maintain availability when one source is incomplete or unavailable. They generate candidate leads. The Web Investigation Framework must validate those leads and capture target-specific source content before presenting them as evidence.</p>
+
+  <p class="footer-note">Prepared for the Web Investigation Framework project.</p>
+</body>
+</html>

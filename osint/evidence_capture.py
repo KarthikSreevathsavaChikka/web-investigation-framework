@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import re
+import math
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlsplit
 
 from core.playwright_session import close_browser_session, launch_browser_session
@@ -13,6 +15,7 @@ from osint.models import EvidenceScreenshotRecord, NormalizedTarget, PageCapture
 from osint.normalizer import DomainNormalizer
 from osint.relevance import assess_page_relevance, build_target_variants, find_target_reference, target_keyword_proximity
 from osint.text_cleanup import clean_evidence_text
+from osint.cancellation import InvestigationCancelled
 
 
 HIGHLIGHT_SCRIPT = r"""
@@ -146,6 +149,10 @@ class SERPEvidenceCapturePipeline:
         self.max_screenshots = max(1, min(int(os.getenv("MAX_SCREENSHOTS_PER_SOURCE", "5")), 10))
         self.page_workers = max(1, min(int(os.getenv("PAGE_WORKERS", "3")), 6))
         self.timeout_ms = max(5_000, min(int(os.getenv("OSINT_PAGE_TIMEOUT_MS", "30000")), 120_000))
+        self.source_timeout_seconds = max(
+            15,
+            min(int(os.getenv("OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS", "60")), 300),
+        )
         self.headless = os.getenv("OSINT_EVIDENCE_HEADLESS", "true").lower() not in {"0", "false", "no"}
 
     async def capture(
@@ -154,20 +161,75 @@ class SERPEvidenceCapturePipeline:
         target_domain: str,
         tasks: list[dict],
         target_brand: str = "",
+        cancel_check: Callable[[], bool] | None = None,
     ) -> list[PageCaptureRecord]:
         if not tasks:
             return []
         resources = await launch_browser_session(headless=self.headless)
         semaphore = asyncio.Semaphore(self.page_workers)
         try:
-            return await asyncio.gather(
-                *[
-                    self._capture_source(resources.context, semaphore, investigation_id, target_domain, task, target_brand)
-                    for task in tasks
-                ]
-            )
+            pending = {
+                asyncio.create_task(
+                    self._capture_source_with_timeout(
+                        resources.context,
+                        semaphore,
+                        investigation_id,
+                        target_domain,
+                        task,
+                        target_brand,
+                    )
+                )
+                for task in tasks
+            }
+            completed: list[PageCaptureRecord] = []
+            while pending:
+                if cancel_check and await asyncio.to_thread(cancel_check):
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    raise InvestigationCancelled("Investigation cancelled during evidence capture")
+                done, pending = await asyncio.wait(
+                    pending,
+                    timeout=0.5,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    completed.append(task.result())
+            return completed
         finally:
             await close_browser_session(resources)
+
+    async def _capture_source_with_timeout(
+        self,
+        context,
+        semaphore,
+        investigation_id: str,
+        target_domain: str,
+        task: dict,
+        target_brand: str = "",
+    ) -> PageCaptureRecord:
+        try:
+            return await asyncio.wait_for(
+                self._capture_source(
+                    context,
+                    semaphore,
+                    investigation_id,
+                    target_domain,
+                    task,
+                    target_brand,
+                ),
+                timeout=self.source_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            return PageCaptureRecord(
+                source_id=task["source_id"],
+                source_url=task["source_url"],
+                accessibility_status="failed",
+                failure_reason=(
+                    "Evidence capture exceeded the "
+                    f"{self.source_timeout_seconds}-second per-source limit"
+                ),
+            )
 
     async def _capture_source(self, context, semaphore, investigation_id, target_domain, task, target_brand="") -> PageCaptureRecord:
         record = PageCaptureRecord(source_id=task["source_id"], source_url=task["source_url"])
@@ -206,6 +268,16 @@ class SERPEvidenceCapturePipeline:
                     record.accessibility_status = access_status
                     record.failure_reason = access_reason
                     return record
+
+                document_queries = [item for item in task["queries"] if item.get("document_type")]
+                if task.get("document_priority") and document_queries:
+                    await self._capture_document_viewer_pages(
+                        page, record, investigation_id, target_domain, hostname,
+                        document_queries[0], page_relevance.matched_variant,
+                    )
+                    if record.screenshots:
+                        record.accessibility_status = "document_viewer_captured"
+                        return record
 
                 screenshot_count = 0
                 target_variants = build_target_variants(
@@ -265,7 +337,56 @@ class SERPEvidenceCapturePipeline:
                                 target_keyword_distance=proximity[2],
                             )
                         )
-                record.accessibility_status = "evidence_found" if record.screenshots else "no_evidence"
+                if record.screenshots:
+                    record.accessibility_status = "evidence_found"
+                else:
+                    query = min(task["queries"], key=lambda item: item.get("search_rank", 999999))
+                    target_matches = await self.highlight_page(page, list(target_variants))
+                    if target_matches:
+                        first = target_matches[0]
+                        mark = page.locator('mark[data-osint-evidence="true"]').nth(first["index"])
+                        await mark.scroll_into_view_if_needed()
+                        await mark.evaluate(
+                            "el => el.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'})"
+                        )
+                        await page.wait_for_timeout(350)
+                    screenshot_path = self._screenshot_path(
+                        investigation_id,
+                        target_domain,
+                        "TARGET_BASELINE",
+                        query.get("search_rank", 0),
+                        hostname,
+                        1,
+                    )
+                    screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    screenshot_bytes = await page.screenshot(path=str(screenshot_path), full_page=False)
+                    matched_targets = sorted(
+                        {item["matchedText"] for item in target_matches if item.get("matchedText")},
+                        key=str.casefold,
+                    )
+                    contexts = list(dict.fromkeys(item["context"] for item in target_matches if item.get("context")))
+                    record.screenshots.append(
+                        EvidenceScreenshotRecord(
+                            query_id="TARGET_BASELINE",
+                            query_name="Target-presence baseline",
+                            query_category="target_identity",
+                            search_engine=query.get("search_engine", "unknown"),
+                            serp_rank=query.get("search_rank", 0),
+                            matched_keywords=matched_targets,
+                            matched_phrases=[item for item in matched_targets if " " in item],
+                            evidence_text=(
+                                " | ".join(matched_targets)
+                                or "Target-relevant page baseline; no visible target term was highlightable."
+                            ),
+                            context_text=clean_evidence_text("\n\n".join(contexts)),
+                            match_method="target_only_baseline" if matched_targets else "page_baseline",
+                            screenshot_path=str(screenshot_path),
+                            screenshot_sha256=hashlib.sha256(screenshot_bytes).hexdigest(),
+                            confidence=0.70 if matched_targets else 0.55,
+                            matched_target_variant=page_relevance.matched_variant,
+                        )
+                    )
+                    record.accessibility_status = "baseline_captured"
                 return record
             except Exception as exc:
                 record.accessibility_status = "failed"
@@ -273,6 +394,92 @@ class SERPEvidenceCapturePipeline:
                 return record
             finally:
                 await page.close()
+
+    async def _capture_document_viewer_pages(
+        self, page, record, investigation_id, target_domain, hostname, query, matched_target_variant
+    ) -> None:
+        """Capture public HTML document viewers without bypassing access controls."""
+        page_locators = None
+        for selector in (
+            ".page[data-page-number]",
+            "[data-page-number]",
+            ".pdf-page",
+            ".document-page",
+            ".outer_page",
+        ):
+            locator = page.locator(selector)
+            if await locator.count():
+                page_locators = locator
+                break
+
+        captures: list[tuple[int, bytes]] = []
+        if page_locators is not None:
+            count = await page_locators.count()
+            for index in range(count):
+                item = page_locators.nth(index)
+                try:
+                    await item.scroll_into_view_if_needed(timeout=5_000)
+                    await page.wait_for_timeout(150)
+                    box = await item.bounding_box()
+                    if not box or box["width"] < 200 or box["height"] < 200:
+                        continue
+                    captures.append((index + 1, await item.screenshot()))
+                except Exception:
+                    continue
+
+        if not captures:
+            embedded_document = await page.locator(
+                'embed[type*="pdf" i], object[type*="pdf" i], iframe[src*=".pdf" i]'
+            ).count()
+            known_viewer_hosts = {
+                "acrobat.adobe.com", "docs.google.com", "drive.google.com",
+                "issuu.com", "scribd.com", "www.scribd.com",
+            }
+            if not embedded_document and hostname.casefold() not in known_viewer_hosts:
+                return
+            dimensions = await page.evaluate(
+                "() => ({height: Math.max(document.body.scrollHeight, document.documentElement.scrollHeight), "
+                "viewport: window.innerHeight || 800})"
+            )
+            segment_count = max(1, math.ceil(dimensions["height"] / max(dimensions["viewport"], 1)))
+            for index in range(segment_count):
+                await page.evaluate("y => window.scrollTo(0, y)", index * dimensions["viewport"])
+                await page.wait_for_timeout(150)
+                captures.append((index + 1, await page.screenshot(full_page=False)))
+
+        for page_number, screenshot_bytes in captures:
+            screenshot_path = self._screenshot_path(
+                investigation_id,
+                target_domain,
+                f"{query['query_id']}_DOCUMENT",
+                query.get("search_rank", 0),
+                hostname,
+                page_number,
+            )
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            screenshot_path.write_bytes(screenshot_bytes)
+            record.screenshots.append(
+                EvidenceScreenshotRecord(
+                    query_id=query["query_id"],
+                    query_name=query.get("query_name") or "Public document viewer",
+                    query_category=query.get("query_category") or "documents",
+                    search_engine=query.get("search_engine", "unknown"),
+                    serp_rank=query.get("search_rank", 0),
+                    matched_keywords=[matched_target_variant] if matched_target_variant else [],
+                    matched_phrases=[],
+                    evidence_text=f"Public document viewer page/segment {page_number}",
+                    context_text=(
+                        "The source was an accessible HTML document viewer rather than a directly "
+                        "downloadable PDF or DOCX."
+                    ),
+                    match_method="document_viewer_page",
+                    screenshot_path=str(screenshot_path),
+                    screenshot_sha256=hashlib.sha256(screenshot_bytes).hexdigest(),
+                    confidence=0.70,
+                    matched_target_variant=matched_target_variant,
+                    document_page_number=page_number,
+                )
+            )
 
     @staticmethod
     async def highlight_page(page, keywords: list[str]) -> list[dict]:

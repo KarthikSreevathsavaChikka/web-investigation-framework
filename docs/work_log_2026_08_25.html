@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Daily Work Log - 25 August 2026</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.5; }
+    h1 { color: #17365d; font-size: 22pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 15pt; margin-top: 18pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    .date { color: #5b6573; font-size: 12pt; margin-bottom: 20pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .result { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    li { margin-bottom: 6pt; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+  </style>
+</head>
+<body>
+  <h1>Daily Work Log</h1>
+  <p class="date"><strong>Date:</strong> 25 August 2026</p>
+
+  <div class="summary">
+    <strong>Objective:</strong> Improve public search discovery and prepare the new Web Investigation Framework for a reproducible PostgreSQL-based Docker deployment while keeping the original prototype unchanged.
+  </div>
+
+  <h2>Work Completed</h2>
+  <ol>
+    <li>Implemented an aggregated keyless search-provider flow using Bing RSS and DuckDuckGo.</li>
+    <li>Allowed each provider to run independently so results from one provider remain usable when another provider fails or is rate-limited.</li>
+    <li>Added provider-level success and error tracking for clearer investigation diagnostics.</li>
+    <li>Combined, normalized and deduplicated URLs returned by the configured search providers.</li>
+    <li>Applied target-relevance validation before accepting discovered sources as investigation leads.</li>
+    <li>Updated the target resolver and OSINT discovery flow to use the aggregated provider.</li>
+    <li>Added and updated automated tests for provider aggregation, partial failures, URL normalization, deduplication and target resolution.</li>
+    <li>Created Docker configuration for the Web Investigation Framework application.</li>
+    <li>Added a fresh PostgreSQL 16 container and configured the framework to use it through <code>DATABASE_URL</code>.</li>
+    <li>Added persistent Docker volumes for PostgreSQL data, screenshots, evidence and reports.</li>
+    <li>Added container health checks and service startup dependencies.</li>
+    <li>Added PostgreSQL-compatible connection handling while preserving SQLite support for isolated tests.</li>
+    <li>Documented Docker startup, status, log and shutdown commands in the project README.</li>
+    <li>Confirmed that the original <code>Web-Investigator</code> project and its SQLite data would remain unchanged.</li>
+  </ol>
+
+  <h2>Key Files Updated</h2>
+  <table>
+    <tr><th>Area</th><th>Purpose</th></tr>
+    <tr><td><code>osint/search.py</code></td><td>Aggregated Bing RSS and DuckDuckGo search-provider execution</td></tr>
+    <tr><td><code>osint/resolver.py</code></td><td>Brand and target resolution using combined provider results</td></tr>
+    <tr><td><code>database/connection.py</code></td><td>PostgreSQL connections and SQLite-compatible SQL handling</td></tr>
+    <tr><td><code>compose.yaml</code></td><td>Application and PostgreSQL service definitions</td></tr>
+    <tr><td><code>Dockerfile</code></td><td>Reproducible application container image</td></tr>
+    <tr><td><code>.env.example</code></td><td>Example database and deployment configuration</td></tr>
+    <tr><td><code>README.md</code></td><td>Docker operation and PostgreSQL setup instructions</td></tr>
+  </table>
+
+  <h2>Commits Created</h2>
+  <ul>
+    <li><code>0a8281b</code> — feat: aggregate keyless search providers</li>
+    <li><code>8d72bf8</code> — feat: containerize framework with PostgreSQL</li>
+  </ul>
+
+  <h2>Important Decisions</h2>
+  <ul>
+    <li>Use multiple keyless providers for broader discovery and graceful partial failure.</li>
+    <li>Treat public search results as leads that require relevance validation, not confirmed evidence.</li>
+    <li>Use a fresh PostgreSQL database for the new framework rather than modifying the old SQLite database.</li>
+    <li>Keep the original project as the stable reference version and continue framework development only in the new repository.</li>
+  </ul>
+
+  <h2>End-of-Day Status</h2>
+  <div class="result">
+    <strong>Completed:</strong> Aggregated keyless search discovery and the initial Docker/PostgreSQL deployment foundation.<br>
+    <strong>Next:</strong> Run the complete containerized workflow, correct any PostgreSQL-specific SQL differences, and then introduce FastAPI and background-worker service boundaries.
+  </div>
+</body>
+</html>
