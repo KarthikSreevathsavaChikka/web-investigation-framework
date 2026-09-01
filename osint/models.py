@@ -108,6 +108,7 @@ class EvidenceScreenshotRecord:
     confidence: float
     matched_target_variant: str = ""
     target_keyword_distance: Optional[int] = None
+    document_page_number: Optional[int] = None
 
 
 @dataclass

@@ -73,6 +73,14 @@ class TargetResolverTests(unittest.TestCase):
         self.assertEqual(resolution.candidates[0].domain, "examplebet.com")
         self.assertGreater(resolution.candidates[0].confidence, 0.7)
 
+    def test_search_engine_domains_cannot_become_target_candidates(self):
+        results = [
+            SearchResult("R", "1xbet", "fake", 1, "1xbet official help", "https://support.google.com/chrome", "Official 1xbet app"),
+            SearchResult("R", "1xbet", "fake", 2, "1xbet official", "https://1xbet.com", "Official betting"),
+        ]
+        candidates = TargetResolver().rank_candidates("1xbet", results)
+        self.assertEqual([item.domain for item in candidates], ["1xbet.com"])
+
     def test_resolution_is_not_truncated_to_eight_candidates(self):
         results = [
             SearchResult("R", "ExampleBet", "fake", index, "ExampleBet official site", f"https://examplebet-{index}.test", "Official betting")

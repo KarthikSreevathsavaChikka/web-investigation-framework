@@ -133,6 +133,7 @@ class APITests(unittest.TestCase):
             "target": "example.org",
             "collectors": ["DNS", "RDAP"],
             "brand": "Example",
+            "query_budget": 12,
             "authorized": True,
         })
         self.assertEqual(response.status_code, 202)

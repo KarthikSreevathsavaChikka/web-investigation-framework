@@ -28,6 +28,7 @@ class FrameworkAPIClient:
         *,
         brand: str = "",
         resolution: dict[str, Any] | None = None,
+        query_budget: int = 12,
         authorized: bool,
     ) -> dict[str, Any]:
         return self._request(
@@ -38,6 +39,7 @@ class FrameworkAPIClient:
                 "collectors": collectors,
                 "brand": brand,
                 "resolution": resolution,
+                "query_budget": query_budget,
                 "authorized": authorized,
             },
         )

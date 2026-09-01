@@ -24,6 +24,16 @@ from osint.relevance import assess_serp_result
 
 class BraveSearchCollector(Collector):
     name = "brave_search"
+    SOCIAL_SOURCE_PLATFORMS = {
+        "social_x": "X/Twitter",
+        "social_reddit": "Reddit",
+        "social_instagram": "Instagram",
+        "social_facebook": "Facebook",
+        "social_youtube": "YouTube",
+        "social_quora": "Quora",
+        "telegram": "Telegram",
+        "review_site": "Review site",
+    }
 
     def __init__(self, provider: BraveSearchProvider | None = None):
         self.provider = provider or BraveSearchProvider()
@@ -141,6 +151,24 @@ class BraveSearchCollector(Collector):
                         metadata=common_metadata,
                     )
                 )
+                if source_type in self.SOCIAL_SOURCE_PLATFORMS:
+                    observations.append(
+                        Observation(
+                            collector=self.name,
+                            category="Automated social and review findings",
+                            entity_type="AUTOMATED_SOCIAL_FINDING",
+                            value=result.title,
+                            source_url=result.url,
+                            confidence=0.72,
+                            metadata={
+                                **common_metadata,
+                                "platform": self.SOCIAL_SOURCE_PLATFORMS[source_type],
+                                "post_text": result.snippet,
+                                "collector_method": "keyless_public_search",
+                                "status": "target_validated_search_result",
+                            },
+                        )
+                    )
                 observations.extend(SearchSnippetEvidenceExtractor.extract(result, source_type, target))
             failed_providers = {report.provider for report in reports if report.status == "failed"}
             for provider_name, counts in provider_counts.items():

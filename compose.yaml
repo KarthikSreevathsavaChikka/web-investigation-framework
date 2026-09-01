@@ -5,6 +5,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-web_investigator}
       POSTGRES_USER: ${POSTGRES_USER:-investigator}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-this-local-password}
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,6 +37,7 @@ services:
     ports:
       - "8501:8501"
     volumes:
+      - ./data/browser_sessions:/app/data/browser_sessions:ro
       - screenshots_data:/app/screenshots
       - evidence_data:/app/evidence
       - reports_data:/app/reports
@@ -69,11 +72,15 @@ services:
   worker:
     build: .
     command: ["python", "-m", "services.jobs.worker"]
+    group_add:
+      - "${LOCAL_GID:-1000}"
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
       REDIS_URL: redis://redis:6379/0
       HEADLESS: "true"
+      OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS: ${OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS:-60}
     volumes:
+      - ./data/browser_sessions:/app/data/browser_sessions:ro
       - screenshots_data:/app/screenshots
       - evidence_data:/app/evidence
       - reports_data:/app/reports

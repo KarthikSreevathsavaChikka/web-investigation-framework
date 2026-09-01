@@ -20,6 +20,7 @@ class OSINTDocxReportBuilder:
         investigation = self.repository.get_investigation(investigation_id)
         evidence = self.repository.get_evidence(investigation_id)
         documents = self.repository.get_documents(investigation_id)
+        social_findings = self.repository.get_social_findings(investigation_id)
         domains = self.repository.get_candidates(investigation_id)
         report = Document()
         report.add_heading("Web intelligence and OSINT report", 0)
@@ -68,6 +69,27 @@ class OSINTDocxReportBuilder:
             if image_path.is_file():
                 report.add_picture(str(image_path), width=Inches(6.2))
                 report.add_paragraph(f"Screenshot SHA-256: {item.get('sha256') or ''}")
+
+        social_by_screenshot: dict[str, list[dict]] = {}
+        for finding in social_findings:
+            for screenshot_path in finding.get("screenshot_paths") or []:
+                social_by_screenshot.setdefault(screenshot_path, []).append(finding)
+        if social_by_screenshot:
+            report.add_heading("Social and review captures", level=1)
+            report.add_paragraph(
+                "Each browser screenshot is included once, followed by the target-matching posts visible during that capture."
+            )
+        for screenshot_path, findings in social_by_screenshot.items():
+            platform = findings[0].get("platform") or "Social platform"
+            report.add_heading(f"{platform} capture", level=2)
+            for finding in findings:
+                report.add_paragraph(f"Post URL: {finding.get('post_url') or 'Unavailable'}")
+                report.add_paragraph(
+                    clean_evidence_text(finding.get("post_text") or finding.get("title"), limit=2_000)
+                )
+            image_path = Path(screenshot_path)
+            if image_path.is_file():
+                report.add_picture(str(image_path), width=Inches(6.2))
 
         if documents:
             report.add_heading("Verified public documents", level=1)

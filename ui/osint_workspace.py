@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+import re
 from urllib.parse import urlsplit
 
 import pandas as pd
 import streamlit as st
 
 from osint.collectors import BraveSearchCollector
+from osint.collectors.x_authenticated import configured_x_session_path
+from osint.collectors.authenticated_social import (
+    AUTHENTICATED_SOCIAL_COLLECTORS,
+    configured_social_session_path,
+)
 from osint.models import TargetResolution
 from osint.orchestrator import IntelligenceOrchestrator
 from osint.resolver import ResolutionProviderUnavailable, TargetResolver
@@ -18,6 +24,46 @@ from osint.storage import OSINTRepository
 from osint.domain_intelligence import DomainIntelligenceService, http_status_meaning
 from ui.api_client import APIClientError
 from ui.job_status import get_api_client, render_osint_job_status
+
+
+BRAND_SCOPED_COLLECTORS = frozenset({
+    "X/Twitter authenticated search",
+    "Instagram authenticated search",
+    "Facebook authenticated search",
+    "Telegram authenticated search",
+    "YouTube authenticated search",
+    "Quora authenticated search",
+    "Trustpilot public reviews",
+})
+
+
+def collectors_for_domain(
+    selected_collectors: list[str],
+    domain_index: int,
+) -> list[str]:
+    """Run brand-wide browser collectors once, on the primary resolved domain."""
+    if domain_index == 0:
+        return list(selected_collectors)
+    return [
+        collector
+        for collector in selected_collectors
+        if collector not in BRAND_SCOPED_COLLECTORS
+    ]
+
+
+def report_file_prefix(investigation: dict) -> str:
+    """Return a filesystem-safe, human-readable prefix for exported reports."""
+    values = [
+        investigation.get("resolved_brand") or investigation.get("original_input"),
+        investigation.get("target_domain"),
+    ]
+    parts: list[str] = []
+    for value in values:
+        part = re.sub(r"[^a-zA-Z0-9.-]+", "-", str(value or "").strip()).strip("-.")
+        if part and part.casefold() not in {item.casefold() for item in parts}:
+            parts.append(part)
+    suffix = "_".join(parts) or "target"
+    return f"{investigation['id']}_{suffix}"
 
 
 def render_osint_workspace() -> None:
@@ -103,20 +149,50 @@ def render_osint_workspace() -> None:
                 },
             )
             discovered_domains = [candidate.domain for candidate in resolution.candidates]
+            recommended_domains = [
+                candidate.domain
+                for candidate in resolution.candidates
+                if candidate.confidence >= 0.70
+            ] or discovered_domains[:1]
             selected_domains = st.multiselect(
                 "Domains to analyze",
                 discovered_domains,
-                default=discovered_domains,
-                help="All discovered domains are selected by default. Remove any third-party or irrelevant candidates before starting evidence discovery.",
+                default=recommended_domains,
+                help=(
+                    "Only candidates with at least 70% resolution confidence are selected automatically. "
+                    "Lower-confidence related domains remain available for deliberate manual selection."
+                ),
                 key="osint_selected_domains",
             )
             default_search_collector = (
                 "Google public search" if google_api_available else "Keyless Web Search (no API key)"
             )
+            discovery_depth = st.selectbox(
+                "Discovery depth",
+                ["Fast", "Balanced", "Deep"],
+                index=0,
+                help=(
+                    "Fast runs the 12 highest-priority queries per domain. Balanced runs 25. "
+                    "Deep runs every configured query and can take substantially longer."
+                ),
+                key="osint_discovery_depth",
+            )
+            query_budget = {"Fast": 12, "Balanced": 25, "Deep": 100}[discovery_depth]
+            x_session_ready = configured_x_session_path().is_file()
             default_collectors = [
                 "DNS", "RDAP", "Public website", "Certificate Transparency (crt.sh)",
                 "Wayback historical URLs", default_search_collector,
             ]
+            if x_session_ready:
+                default_collectors.append("X/Twitter authenticated search")
+            social_session_ready = {
+                label: configured_social_session_path(collector.platform_key).is_file()
+                for label, collector in AUTHENTICATED_SOCIAL_COLLECTORS.items()
+            }
+            default_collectors.extend(
+                label for label, ready in social_session_ready.items() if ready
+            )
+            default_collectors.append("Trustpilot public reviews")
             collectors = st.multiselect(
                 "Evidence collectors",
                 list(IntelligenceOrchestrator.COLLECTORS),
@@ -124,6 +200,28 @@ def render_osint_workspace() -> None:
                 help="Free discovery uses crt.sh, Wayback, and keyless search. Google is optional and not selected by default.",
                 key="osint_collectors",
             )
+            if len(selected_domains) > 1 and BRAND_SCOPED_COLLECTORS.intersection(collectors):
+                st.caption(
+                    "Authenticated social and Trustpilot searches run once for the primary domain. "
+                    "Related-domain jobs reuse the brand scope and run only domain-specific collectors."
+                )
+            if "X/Twitter authenticated search" in collectors and not x_session_ready:
+                st.warning(
+                    "X authenticated search needs a local browser session. Run "
+                    "`python -m scripts.setup_x_session` on the host, complete login/OTP, then restart the workers."
+                )
+            elif x_session_ready:
+                st.success("X authenticated browser session is configured.")
+            for label, collector in AUTHENTICATED_SOCIAL_COLLECTORS.items():
+                platform = collector.platform_key.capitalize()
+                if label in collectors and not social_session_ready[label]:
+                    st.warning(
+                        f"{platform} authenticated search needs a local browser session. Run "
+                        f"`python -m scripts.setup_{collector.platform_key}_session` on the host, "
+                        "complete login/OTP, then restart the workers."
+                    )
+                elif social_session_ready[label]:
+                    st.success(f"{platform} authenticated browser session is configured.")
             if "Brave Search" in collectors and not BraveSearchCollector().available:
                 st.info("Brave Search is unavailable until `BRAVE_SEARCH_API_KEY` is configured.")
             if "Google public search" in collectors and not (google_provider.api_key and google_provider.cse_id):
@@ -141,17 +239,18 @@ def render_osint_workspace() -> None:
                 try:
                     jobs = []
                     progress = st.progress(0, text="Starting evidence discovery…")
-                    for index, domain in enumerate(selected_domains, start=1):
+                    for index, domain in enumerate(selected_domains):
                         progress.progress(
-                            (index - 1) / len(selected_domains),
+                            index / len(selected_domains),
                             text=f"Collecting public evidence for {domain}…",
                         )
                         jobs.append(
                             get_api_client().submit_osint(
                                 domain,
-                                list(collectors),
+                                collectors_for_domain(list(collectors), index),
                                 brand=resolution.resolved_brand,
                                 resolution=asdict(resolution),
+                                query_budget=query_budget,
                                 authorized=acknowledged,
                             )
                         )
@@ -190,7 +289,7 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
     observations = repository.get_observations(investigation_id)
     findings = [
         item for item in observations
-        if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "SEARCH_PROVIDER_ERROR", "ACCESS_STATUS", "CANDIDATE_DOMAIN"}
+        if item.get("entity_type") not in {"SEARCH_RESULT", "SEARCH_RESULT_REJECTED", "SEARCH_PROVIDER_MANUAL_REQUIRED", "SEARCH_PROVIDER_ERROR", "ACCESS_STATUS", "CANDIDATE_DOMAIN", "AUTOMATED_SOCIAL_FINDING"}
         and not (
             item.get("entity_type") in {"SEARCH_SNIPPET_EVIDENCE", "PUBLIC_PAGE_EVIDENCE"}
             and item.get("target_keyword_distance") is None
@@ -201,19 +300,32 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
         )
     ]
     collector_runs = repository.get_collector_runs(investigation_id)
+    x_session_ready = configured_x_session_path().is_file()
+    x_collector_run = next(
+        (item for item in collector_runs if item["collector"] == "x_authenticated_playwright"),
+        None,
+    )
     queries = repository.get_queries(investigation_id)
     candidates = repository.get_candidates(investigation_id)
     candidate_leads = repository.get_candidate_leads(investigation_id)
     identities = repository.get_search_identities(investigation_id)
+    social_findings = repository.get_social_findings(investigation_id)
     sources = repository.get_sources(investigation_id)
     documents = repository.get_documents(investigation_id)
+    document_viewer_captures = repository.get_document_viewer_captures(investigation_id)
     analyst_notes = repository.get_analyst_notes(investigation_id)
     risk_indicators = repository.get_risk_indicators(investigation_id)
-    manual_links = [item for item in observations if item.get("entity_type") == "MANUAL_REVIEW_LINK"]
+    automated_platforms = {item["platform"] for item in social_findings}
+    manual_links = [
+        item for item in observations
+        if item.get("entity_type") == "MANUAL_REVIEW_LINK"
+        and item.get("value") not in automated_platforms
+    ]
     evidence = repository.get_evidence(investigation_id)
     page_captures = repository.get_page_captures(investigation_id)
     query_metrics = repository.get_query_metrics(investigation_id)
     summary_counts = repository.get_summary_counts(investigation_id)
+    file_prefix = report_file_prefix(investigation)
     metric_columns[2].metric("Confirmed findings", len(findings), border=True)
     metric_columns[3].metric("Dork queries", len(queries), border=True)
 
@@ -221,18 +333,18 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
     st.download_button(
         ":material/download: Download HTML intelligence report",
         data=report_html.encode("utf-8"),
-        file_name=f"{investigation_id}_osint_report.html",
+        file_name=f"{file_prefix}_osint_report.html",
         mime="text/html",
     )
     report_builder = OSINTReportBuilder(repository)
     downloads = st.container(horizontal=True)
     with downloads:
-        st.download_button(":material/data_object: Download domain JSON", report_builder.build_json(investigation_id), f"{investigation_id}_domains.json", "application/json")
-        st.download_button(":material/table: Download domain CSV", report_builder.build_domain_csv(investigation_id), f"{investigation_id}_domains.csv", "text/csv")
+        st.download_button(":material/data_object: Download domain JSON", report_builder.build_json(investigation_id), f"{file_prefix}_domains.json", "application/json")
+        st.download_button(":material/table: Download domain CSV", report_builder.build_domain_csv(investigation_id), f"{file_prefix}_domains.csv", "text/csv")
     st.download_button(
         ":material/download: Download DOCX evidence report",
         data=OSINTDocxReportBuilder(repository).build(investigation_id),
-        file_name=f"{investigation_id}_evidence_report.docx",
+        file_name=f"{file_prefix}_evidence_report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
@@ -396,9 +508,138 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
                 )
 
     with findings_tab:
+        if social_findings:
+            st.subheader("Automated social and review findings")
+            st.caption(
+                "Target-validated public results discovered automatically through keyless search. "
+                "These remain search-result evidence until the platform page is independently captured."
+            )
+            social_frame = pd.DataFrame(social_findings).rename(
+                columns={
+                    "post_url": "Source URL", "post_text": "Public snippet",
+                    "search_rank": "Rank", "search_engine": "Provider",
+                }
+            )
+            st.dataframe(
+                social_frame[
+                    ["platform", "title", "Public snippet", "confidence", "query_id",
+                     "Provider", "Rank", "status", "Source URL", "collected_at"]
+                ],
+                hide_index=True,
+                column_config={
+                    "Source URL": st.column_config.LinkColumn("Source URL"),
+                    "confidence": st.column_config.ProgressColumn(
+                        "Confidence", min_value=0.0, max_value=1.0, format="percent"
+                    ),
+                },
+            )
+            captured_platform_findings = [
+                item for item in social_findings
+                if item["screenshot_paths"]
+            ]
+            if captured_platform_findings:
+                screenshot_count = sum(len(item["screenshot_paths"]) for item in captured_platform_findings)
+                with st.expander(f"Platform capture screenshots ({screenshot_count})"):
+                    shown_paths: set[str] = set()
+                    for item in captured_platform_findings:
+                        for screenshot_path in item["screenshot_paths"]:
+                            if screenshot_path in shown_paths or not Path(screenshot_path).is_file():
+                                continue
+                            shown_paths.add(screenshot_path)
+                            st.image(
+                                screenshot_path,
+                                caption=f"{item['title']} · {item['post_url']}",
+                                width="stretch",
+                            )
+
+        platforms = ["X/Twitter", "Reddit", "Instagram", "Facebook", "Telegram", "YouTube", "Quora", "Trustpilot", "Review site"]
+        if not x_session_ready:
+            st.warning(
+                "Authenticated X/Twitter collection is not configured yet. Run "
+                "`python -m scripts.setup_x_session`, complete login in the visible browser, "
+                "restart the workers, and start a new investigation."
+            )
+        elif not x_collector_run:
+            st.info(
+                "The X session is ready, but this investigation did not run the authenticated X collector. "
+                "Start a new investigation and select `X/Twitter authenticated search`."
+            )
+        coverage = []
+        for platform in platforms:
+            count = sum(1 for item in social_findings if item["platform"] == platform)
+            if platform == "X/Twitter":
+                direct_count = sum(
+                    1 for item in social_findings
+                    if item["platform"] == platform
+                    and item["collector_method"] == "x_authenticated_playwright"
+                )
+                if x_collector_run:
+                    method = "Authenticated Playwright"
+                    if x_collector_run["status"] == "FAILED":
+                        status = f"Failed: {x_collector_run['error'] or 'unknown error'}"
+                    elif direct_count:
+                        status = "Authenticated results captured"
+                    else:
+                        status = "Completed; no matching posts captured"
+                elif not x_session_ready:
+                    method = "Authenticated Playwright"
+                    status = "Login session not configured"
+                else:
+                    method = "Authenticated Playwright"
+                    status = "Ready; collector not selected for this investigation"
+            elif platform in {"Instagram", "Facebook", "Telegram", "YouTube", "Quora"}:
+                platform_key = platform.casefold()
+                collector_name = f"{platform_key}_authenticated_playwright"
+                platform_run = next(
+                    (item for item in collector_runs if item["collector"] == collector_name),
+                    None,
+                )
+                session_ready = configured_social_session_path(platform_key).is_file()
+                direct_count = sum(
+                    1 for item in social_findings
+                    if item["platform"] == platform
+                    and item["collector_method"] == collector_name
+                )
+                method = "Authenticated Playwright"
+                if platform_run and platform_run["status"] == "FAILED":
+                    status = f"Failed: {platform_run['error'] or 'unknown error'}"
+                elif platform_run and direct_count:
+                    status = "Authenticated results and screenshots captured"
+                elif platform_run:
+                    status = "Completed; no matching public results captured"
+                elif not session_ready:
+                    status = "Login session not configured"
+                else:
+                    status = "Ready; collector not selected for this investigation"
+            elif platform == "Trustpilot":
+                trustpilot_run = next(
+                    (item for item in collector_runs if item["collector"] == "trustpilot_public_playwright"),
+                    None,
+                )
+                method = "Public Playwright"
+                if trustpilot_run and trustpilot_run["status"] == "FAILED":
+                    status = f"Failed: {trustpilot_run['error'] or 'unknown error'}"
+                elif trustpilot_run and count:
+                    status = "Public reviews and screenshots captured"
+                elif trustpilot_run:
+                    status = "Completed; no matching company reviews found"
+                else:
+                    status = "Collector not selected for this investigation"
+            else:
+                method = "Keyless public search"
+                status = "Automated results found" if count else "Manual fallback retained"
+            coverage.append({
+                "Platform": platform,
+                "Automated findings": count,
+                "Method": method,
+                "Status": status,
+            })
+        st.subheader("Social collection coverage")
+        st.dataframe(pd.DataFrame(coverage), hide_index=True)
+
         if manual_links:
             st.subheader("Manual social and review searches")
-            st.caption("These links require manual review; they are not automated findings.")
+            st.caption("Only platforms with no automated result remain here for manual review.")
             st.dataframe(
                 pd.DataFrame(manual_links)[["value", "source_url", "query_id", "discovered_at"]],
                 hide_index=True,
@@ -469,12 +710,14 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
             st.info("No search-backed sources were collected. Enable a configured search provider.")
 
     with documents_tab:
-        if documents:
+        if documents or document_viewer_captures:
             st.caption(
-                "Verified PDF and DOCX files discovered by automated search queries. "
-                "Each stored file keeps its source URL, SHA-256 hash, and query provenance."
+                "Verified downloaded files and captures from publicly accessible HTML document viewers. "
+                "Each item keeps its source URL, SHA-256 hash, and query provenance."
             )
-            st.metric("Verified documents", len(documents), border=True)
+            metric_columns = st.columns(2)
+            metric_columns[0].metric("Verified downloads", len(documents), border=True)
+            metric_columns[1].metric("Viewer page captures", len(document_viewer_captures), border=True)
             document_rows = []
             for document in documents:
                 row = dict(document)
@@ -533,10 +776,34 @@ def render_osint_dashboard(repository: OSINTRepository, investigation_id: str) -
                         st.image(str(image_path), width="stretch")
                         st.caption(f"Screenshot SHA-256: {capture['sha256']}")
                         st.write(document.get("evidence_context") or "Target-specific document evidence")
+
+            if document_viewer_captures:
+                st.subheader("Public document viewer captures")
+                st.caption(
+                    "These sources were HTML viewers rather than directly downloadable files. "
+                    "Only pages visible without login, paywall, CAPTCHA, or access-control bypass are captured."
+                )
+                for capture in document_viewer_captures:
+                    with st.container(border=True):
+                        st.markdown(f"**{capture.get('page_title') or 'Public document viewer'}**")
+                        st.caption(
+                            f"Found by {capture['query_id']} via {capture.get('search_engine') or 'public search'} · "
+                            f"Page {capture['page_number']} · SHA-256: {capture['sha256']}"
+                        )
+                        st.link_button(
+                            ":material/open_in_new: Open viewer",
+                            capture.get("final_url") or capture["source_url"],
+                            key=f"viewer_link_{investigation_id}_{capture['capture_id']}",
+                        )
+                        image_path = Path(capture["screenshot_path"])
+                        if image_path.is_file():
+                            st.image(str(image_path), width="stretch")
+                        else:
+                            st.warning("The stored viewer screenshot file is unavailable.")
         else:
             st.info(
-                "No target-related public documents were downloaded. Only accepted search-result documents are downloaded; "
-                "document-query results are prioritised before ordinary webpages."
+                "No target-related public documents or accessible viewer pages were captured. "
+                "Document-query results are prioritised before ordinary webpages."
             )
 
     with collectors_tab:

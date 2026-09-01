@@ -36,6 +36,8 @@ ENV/
 
 # Database & Evidence Screenshots
 data/*.db
+data/browser_sessions/*
+!data/browser_sessions/.gitkeep
 *.db
 *.sqlite
 *.sqlite3

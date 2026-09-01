@@ -130,7 +130,7 @@ class PublicSearchResultCollector:
                 page_screenshots = (
                     render_pdf_pages(
                         artifact_path,
-                        document_assessment.relevant_pages,
+                        tuple(range(1, document_assessment.page_count + 1)),
                         Path(artifact_path).parent / f"{artifact_hash}_pages",
                     )
                     if is_pdf

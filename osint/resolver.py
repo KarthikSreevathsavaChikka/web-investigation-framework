@@ -37,6 +37,7 @@ class TargetResolver:
     EXCLUDED_DOMAINS = {
         "facebook.com", "instagram.com", "linkedin.com", "reddit.com", "t.me",
         "twitter.com", "x.com", "youtube.com", "wikipedia.org",
+        "bing.com", "duckduckgo.com", "google.com", "google.co.in", "search.google",
     }
 
     @staticmethod

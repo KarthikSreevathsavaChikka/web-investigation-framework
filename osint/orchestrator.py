@@ -7,7 +7,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Iterable
 
-from osint.collectors import BraveSearchCollector, CertificateTransparencyCollector, DNSCollector, GoogleSearchCollector, KeylessSearchCollector, PublicWebCollector, RDAPCollector, WaybackCDXCollector
+from osint.collectors import AUTHENTICATED_SOCIAL_COLLECTORS, BraveSearchCollector, CertificateTransparencyCollector, DNSCollector, GoogleSearchCollector, KeylessSearchCollector, PublicWebCollector, RDAPCollector, TrustpilotCollector, WaybackCDXCollector, XAuthenticatedCollector
 from osint.collectors.base import Collector, CollectorContext
 from osint.collectors.results import PublicSearchResultCollector
 from osint.dorks import DorkGenerator
@@ -31,6 +31,9 @@ class IntelligenceOrchestrator:
         "Keyless Web Search (no API key)": KeylessSearchCollector,
         "Certificate Transparency (crt.sh)": CertificateTransparencyCollector,
         "Wayback historical URLs": WaybackCDXCollector,
+        "X/Twitter authenticated search": XAuthenticatedCollector,
+        "Trustpilot public reviews": TrustpilotCollector,
+        **AUTHENTICATED_SOCIAL_COLLECTORS,
     }
 
     def __init__(self, repository: OSINTRepository | None = None):
@@ -44,6 +47,7 @@ class IntelligenceOrchestrator:
         *,
         brand: str = "",
         resolution: TargetResolution | None = None,
+        query_budget: int | None = None,
         cancel_check: Callable[[], bool] | None = None,
     ) -> str:
         def raise_if_cancelled() -> None:
@@ -60,7 +64,17 @@ class IntelligenceOrchestrator:
         context = CollectorContext(
             queries=queries,
             request_timeout=max(3, min(int(os.getenv("OSINT_REQUEST_TIMEOUT", "10")), 60)),
-            search_query_budget=max(1, min(int(os.getenv("OSINT_QUERY_BUDGET", str(len(queries)))), len(queries))),
+            search_query_budget=max(
+                1,
+                min(
+                    int(
+                        query_budget
+                        if query_budget is not None
+                        else os.getenv("OSINT_QUERY_BUDGET", "12")
+                    ),
+                    len(queries),
+                ),
+            ),
             results_per_query=max(1, min(int(os.getenv("OSINT_RESULTS_PER_QUERY", "10")), 20)),
             cancel_check=cancel_check,
         )
@@ -104,7 +118,7 @@ class IntelligenceOrchestrator:
                 investigation_id, CollectorResult("domain_availability", "PARTIAL", error=str(exc), duration_seconds=time.monotonic() - check_started)
             )
 
-        document_budget = max(0, min(int(os.getenv("OSINT_DOCUMENT_DOWNLOAD_BUDGET", "25")), 100))
+        document_budget = max(0, min(int(os.getenv("OSINT_DOCUMENT_DOWNLOAD_BUDGET", "1000")), 10_000))
         document_sources = self.repository.get_document_sources(investigation_id, document_budget)
         source_budget = max(0, min(int(os.getenv("OSINT_SOURCE_CRAWL_BUDGET", "8")), 25))
         ordinary_sources = self.repository.get_sources(investigation_id)[:source_budget]
@@ -131,20 +145,46 @@ class IntelligenceOrchestrator:
 
         evidence_budget = max(0, min(int(os.getenv("OSINT_EVIDENCE_SOURCE_BUDGET", "8")), 25))
         evidence_tasks = self.repository.get_evidence_tasks(investigation_id, evidence_budget)
+        document_tasks = self.repository.get_document_capture_tasks(investigation_id)
+        merged_tasks = {item["source_id"]: item for item in evidence_tasks}
+        for document_task in document_tasks:
+            existing = merged_tasks.get(document_task["source_id"])
+            if existing:
+                query_keys = {
+                    (item["query_id"], item.get("search_engine"))
+                    for item in existing["queries"]
+                }
+                existing["queries"].extend(
+                    item for item in document_task["queries"]
+                    if (item["query_id"], item.get("search_engine")) not in query_keys
+                )
+                existing["document_priority"] = 1
+            else:
+                merged_tasks[document_task["source_id"]] = document_task
+        evidence_tasks = list(merged_tasks.values())
         raise_if_cancelled()
         if evidence_tasks:
             started = time.monotonic()
             try:
                 captures = asyncio.run(
                     SERPEvidenceCapturePipeline(EVIDENCE_DIR).capture(
-                        investigation_id, target.domain, evidence_tasks, target.brand
+                        investigation_id,
+                        target.domain,
+                        evidence_tasks,
+                        target.brand,
+                        cancel_check=cancel_check,
                     )
                 )
                 self.repository.save_page_captures(investigation_id, captures)
                 capture_status = "COMPLETED" if any(
-                    item.accessibility_status in {"evidence_found", "baseline_captured", "no_evidence"} for item in captures
+                    item.accessibility_status in {
+                        "evidence_found", "baseline_captured", "document_viewer_captured", "no_evidence"
+                    } for item in captures
                 ) else "PARTIAL"
                 capture_error = None
+            except InvestigationCancelled:
+                self.repository.cancel(investigation_id)
+                raise
             except Exception as exc:
                 captures = []
                 capture_status = "FAILED"

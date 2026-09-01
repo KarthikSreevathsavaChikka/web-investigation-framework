@@ -46,6 +46,7 @@ def execute_job(job: dict, cancel_check=None) -> dict:
             payload["collectors"],
             brand=payload.get("brand", ""),
             resolution=resolution,
+            query_budget=int(payload.get("query_budget", 12)),
             cancel_check=cancel_check,
         )
         return {"investigation_id": investigation_id, "component": "osint"}
