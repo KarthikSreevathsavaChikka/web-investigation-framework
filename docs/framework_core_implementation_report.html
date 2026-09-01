@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Framework Core Implementation Report</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: Arial, sans-serif; color: #1f2937; font-size: 11pt; line-height: 1.45; }
+    h1 { color: #17365d; font-size: 24pt; margin-bottom: 4pt; }
+    h2 { color: #1f4e78; font-size: 16pt; margin-top: 20pt; border-bottom: 1px solid #b4c6e7; padding-bottom: 3pt; }
+    h3 { color: #2f5597; font-size: 12.5pt; margin-top: 14pt; }
+    .subtitle { color: #5b6573; font-size: 12pt; margin-bottom: 22pt; }
+    .summary { background: #eaf2f8; border-left: 5px solid #2f75b5; padding: 10pt 12pt; margin: 12pt 0; }
+    .success { background: #e2f0d9; border-left: 5px solid #70ad47; padding: 10pt 12pt; margin: 14pt 0; }
+    .notice { background: #fff2cc; border-left: 5px solid #bf9000; padding: 10pt 12pt; margin: 14pt 0; }
+    pre { background: #f3f4f6; border: 1px solid #d1d5db; padding: 10pt; font-family: "Courier New", monospace; font-size: 9pt; white-space: pre-wrap; }
+    code { font-family: "Courier New", monospace; color: #9c2c2c; }
+    table { width: 100%; border-collapse: collapse; margin: 10pt 0; }
+    th { background: #1f4e78; color: white; text-align: left; padding: 7pt; }
+    td { border: 1px solid #b8c2cc; padding: 7pt; vertical-align: top; }
+    tr:nth-child(even) td { background: #f7f9fb; }
+    li { margin-bottom: 5pt; }
+    .footer-note { color: #6b7280; font-size: 9pt; margin-top: 24pt; }
+  </style>
+</head>
+<body>
+  <h1>Framework Core Implementation Report</h1>
+  <p class="subtitle">Web Investigation Framework — first implementation milestone</p>
+
+  <div class="summary">
+    <strong>Outcome.</strong> A clean baseline of the original Web Investigator application was established in the new repository, and the first reusable framework layer was added on a dedicated feature branch. Existing OSINT and Dynamic Web Investigation behavior was preserved.
+  </div>
+
+  <h2>1. Repository Setup</h2>
+  <table>
+    <tr><th>Item</th><th>Value</th></tr>
+    <tr><td>Old prototype location</td><td><code>/home/cdac/Music/Web-Investigator</code></td></tr>
+    <tr><td>New framework location</td><td><code>/home/cdac/Music/web-investigation-framework</code></td></tr>
+    <tr><td>GitHub repository</td><td><code>github.com/KarthikSreevathsavaChikka/web-investigation-framework</code></td></tr>
+    <tr><td>Baseline commit</td><td><code>9a4e1ed — chore: import original Web Investigator prototype</code></td></tr>
+    <tr><td>Baseline tag</td><td><code>prototype-baseline-v1</code></td></tr>
+    <tr><td>Framework branch</td><td><code>feature/framework-core</code></td></tr>
+    <tr><td>Framework commit</td><td><code>b5e6ef5 — feat: add investigation framework core</code></td></tr>
+  </table>
+
+  <p>The old prototype repository was retained separately. Source code was copied into the new repository without moving or deleting the original version.</p>
+
+  <h2>2. Baseline Import</h2>
+  <p>The current application source, tests, safe configuration templates, and architecture documents were copied into the new repository. The following local or sensitive artifacts were deliberately excluded:</p>
+  <ul>
+    <li>Old Git history and metadata</li>
+    <li>Virtual environments and Python caches</li>
+    <li><code>.env</code> and Streamlit secrets</li>
+    <li>SQLite database files</li>
+    <li>Generated evidence and screenshots</li>
+    <li>Browser profiles and runtime downloads</li>
+    <li>Archives and LibreOffice lock files</li>
+  </ul>
+  <p>The new repository's <code>.gitignore</code> was strengthened to prevent these artifacts from being committed later.</p>
+
+  <h2>3. New Framework Package</h2>
+  <p>A new UI-independent Python package was created:</p>
+  <pre>investigator/
+|-- __init__.py
+`-- core/
+    |-- __init__.py
+    |-- context.py
+    |-- exceptions.py
+    |-- models.py
+    |-- pipeline.py
+    `-- stage.py</pre>
+  <p>This package does not depend on Streamlit or FastAPI. It can be reused by the Streamlit application, future APIs, background workers, a CLI, or automated tests.</p>
+
+  <h2>4. Models and Lifecycle Statuses</h2>
+  <p><code>investigator/core/models.py</code> introduces standardized framework models:</p>
+  <ul>
+    <li><strong>InvestigationCase:</strong> top-level case identity, target, lifecycle, selected modules, timestamps, and metadata.</li>
+    <li><strong>InvestigationTarget:</strong> normalized representation of a domain, URL, brand, or other target with confidence and metadata.</li>
+    <li><strong>Evidence:</strong> common evidence representation with type, source, value, confidence, and metadata.</li>
+    <li><strong>Finding:</strong> standardized analytical finding with severity, confidence, and related evidence identifiers.</li>
+    <li><strong>StageResult:</strong> standardized output returned by every pipeline stage.</li>
+  </ul>
+
+  <h3>Investigation statuses</h3>
+  <pre>CREATED
+QUEUED
+RUNNING
+WAITING_FOR_INPUT
+COMPLETED
+PARTIAL
+FAILED
+CANCELLED</pre>
+
+  <h3>Stage statuses</h3>
+  <pre>PENDING
+RUNNING
+WAITING_FOR_INPUT
+COMPLETED
+PARTIAL
+FAILED
+CANCELLED
+SKIPPED</pre>
+  <p>Validation was added for empty targets, invalid confidence values, inconsistent timestamps, and failed results without an error description.</p>
+
+  <h2>5. Shared Investigation Context</h2>
+  <p><code>investigator/core/context.py</code> introduces <code>InvestigationContext</code>, the shared mutable state passed between pipeline stages. It contains:</p>
+  <ul>
+    <li>The top-level investigation case</li>
+    <li>Resolved and selected targets</li>
+    <li>Collected evidence</li>
+    <li>Analytical findings</li>
+    <li>Results indexed by stage name</li>
+    <li>Pipeline metadata</li>
+    <li>A thread-safe cancellation signal</li>
+  </ul>
+  <p>Recording a stage result automatically adds its evidence and findings to the shared context.</p>
+
+  <h2>6. Standard Stage Contract</h2>
+  <p><code>investigator/core/stage.py</code> defines the abstract <code>InvestigationStage</code> contract. Every future OSINT, Dynamic Web, correlation, risk, or reporting stage will provide:</p>
+  <ul>
+    <li>A unique stage name</li>
+    <li>Optional dependencies on earlier stages</li>
+    <li>An optional enable/disable decision</li>
+    <li>An <code>execute(context)</code> method returning <code>StageResult</code></li>
+  </ul>
+  <p>The file also defines <code>StageProgress</code> and a progress-callback contract for APIs, workers, and user interfaces.</p>
+
+  <h2>7. Pipeline Engine</h2>
+  <p><code>investigator/core/pipeline.py</code> adds a deterministic sequential pipeline engine with:</p>
+  <ul>
+    <li>Unique stage-name validation</li>
+    <li>Dependency ordering validation</li>
+    <li>Ordered execution</li>
+    <li>Optional and skipped stages</li>
+    <li>Progress-start and progress-completion events</li>
+    <li>Exception conversion into standardized failed results</li>
+    <li>Stop-on-failure behavior</li>
+    <li>Cancellation handling</li>
+    <li><code>WAITING_FOR_INPUT</code> pause handling</li>
+    <li>Resume support for already completed stages</li>
+    <li>Final case-status and completion-time updates</li>
+  </ul>
+  <p>The pause state is intended for future analyst approval and manual browser authentication workflows.</p>
+
+  <h2>8. Framework Exceptions</h2>
+  <p><code>investigator/core/exceptions.py</code> adds a small exception hierarchy:</p>
+  <ul>
+    <li><code>InvestigationFrameworkError</code></li>
+    <li><code>PipelineConfigurationError</code></li>
+    <li><code>PipelineExecutionError</code></li>
+  </ul>
+  <p>This distinguishes invalid pipeline definitions and execution-state problems from collector or browser errors.</p>
+
+  <h2>9. Tests Added</h2>
+  <p><code>tests/test_framework_core.py</code> adds nine tests covering:</p>
+  <ol>
+    <li>Case creation and target normalization</li>
+    <li>Target-confidence validation</li>
+    <li>Failed-result validation</li>
+    <li>Ordered stage execution and evidence collection</li>
+    <li>Duplicate and invalid dependency rejection</li>
+    <li>Exception conversion and pipeline failure</li>
+    <li>Waiting-for-input pipeline pause</li>
+    <li>Disabled-stage skipping</li>
+    <li>Progress callback delivery</li>
+  </ol>
+
+  <div class="success">
+    <strong>Verification result:</strong> 57 tests passed — 9 new framework tests and all 48 existing baseline tests. The new framework package also passed Python bytecode compilation checks.
+  </div>
+
+  <h2>10. Existing Behavior Preserved</h2>
+  <p>This milestone intentionally did not connect the existing application to the new pipeline. The following code remains operational and unchanged by the framework foundation:</p>
+  <ul>
+    <li>Streamlit application and current workspace selection</li>
+    <li>OSINT orchestrator and collectors</li>
+    <li>Dynamic Playwright investigation engine</li>
+    <li>Current SQLite repository implementations</li>
+    <li>Existing dashboards and reports</li>
+  </ul>
+  <p>This avoids a high-risk rewrite and provides a stable framework contract before adapting working components.</p>
+
+  <h2>11. Current Git State</h2>
+  <pre>main
+`-- 9a4e1ed  chore: import original Web Investigator prototype
+    `-- feature/framework-core
+        `-- b5e6ef5  feat: add investigation framework core</pre>
+  <div class="notice">
+    The framework commit exists locally on <code>feature/framework-core</code>. If it has not yet been pushed, publish it with:<br><br>
+    <code>git push -u origin feature/framework-core</code>
+  </div>
+
+  <h2>12. Recommended Next Milestone</h2>
+  <p>The next step should be an <strong>OSINT adapter stage</strong>, not a rewrite. It should wrap the existing <code>IntelligenceOrchestrator</code> behind the new <code>InvestigationStage</code> contract and map its output into framework evidence and findings.</p>
+  <p>After the OSINT adapter is stable, create a Dynamic Web adapter for the existing Playwright engine. Only then should the unified pipeline be exposed through FastAPI and background workers.</p>
+
+  <p class="footer-note">Prepared for the Web Investigation Framework repository. This report documents changes through framework commit b5e6ef5.</p>
+</body>
+</html>
