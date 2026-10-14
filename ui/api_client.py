@@ -44,21 +44,30 @@ class FrameworkAPIClient:
             },
         )
 
-    def submit_dynamic(
+    def submit_virustotal(
         self,
-        target: str,
-        max_pages: int,
+        domains: list[str],
         *,
+        brand: str = "",
         authorized: bool,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
-            "/api/v1/jobs/dynamic",
-            json={"target": target, "max_pages": max_pages, "authorized": authorized},
+            "/api/v1/jobs/virustotal",
+            json={"domains": domains, "brand": brand, "authorized": authorized},
         )
 
     def get_job(self, job_id: str) -> dict[str, Any]:
         return self._request("GET", f"/api/v1/jobs/{job_id}")
+
+    def submit_darkweb(self, target: str, onion_urls: list[str]) -> dict[str, Any]:
+        return self._request("POST", "/api/v1/jobs/darkweb", json={
+            "target": target, "onion_urls": onion_urls, "authorized": True,
+        })
+
+    def list_jobs(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        response = self._request("GET", "/api/v1/jobs", params={"limit": limit})
+        return list(response.get("items") or [])
 
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         return self._request("POST", f"/api/v1/jobs/{job_id}/cancel")

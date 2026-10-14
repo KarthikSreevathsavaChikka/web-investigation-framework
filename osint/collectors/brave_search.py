@@ -44,10 +44,10 @@ class BraveSearchCollector(Collector):
 
     def collect(self, target: NormalizedTarget, context: CollectorContext) -> list[Observation]:
         if not self.available:
-            return []
+            raise RuntimeError(f"{self.name} is unavailable; check provider configuration")
 
         observations = []
-        default_delay = "0"
+        default_delay = "0.25"
         request_delay = max(0.0, min(float(os.getenv("OSINT_SEARCH_REQUEST_DELAY", default_delay)), 5.0))
         selected_queries = list(context.queries)[: context.search_query_budget]
         for index, query in enumerate(selected_queries):
@@ -91,6 +91,8 @@ class BraveSearchCollector(Collector):
                 }
                 if report.status == "failed":
                     observations.extend(self._provider_failure_observations(query, report))
+                elif report.error:
+                    observations.append(self._provider_failure_observations(query, report)[0])
             if not reports:
                 provider_counts[self.provider.name] = {
                     "raw": len(results),
@@ -180,7 +182,7 @@ class BraveSearchCollector(Collector):
                     raw_results=counts["raw"],
                     accepted_results=counts["accepted"],
                     rejected_irrelevant=counts["rejected"],
-                    status="completed",
+                    status="partial" if any(report.provider == provider_name and report.error for report in reports) else "completed",
                 ))
             if query.category == "support_social":
                 observations.extend(self._manual_social_links(target, query))

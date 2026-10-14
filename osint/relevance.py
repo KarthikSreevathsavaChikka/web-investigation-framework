@@ -7,6 +7,14 @@ from urllib.parse import urlsplit
 from osint.models import NormalizedTarget, SearchResult
 
 
+# Explicit aliases must represent a reviewed brand identity.  Do not derive
+# aliases from individual words such as "reddy", which would accept unrelated
+# people and businesses.
+REVIEWED_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "reddybook": ("reddy anna book", "reddyannabook"),
+}
+
+
 @dataclass(frozen=True)
 class RelevanceAssessment:
     accepted: bool
@@ -20,6 +28,7 @@ def build_target_variants(target: NormalizedTarget) -> tuple[str, ...]:
     label = domain.split(".", 1)[0]
     compact_brand = re.sub(r"[^a-z0-9]", "", (target.brand or label).casefold())
     variants = {domain, label, compact_brand}
+    variants.update(REVIEWED_BRAND_ALIASES.get(compact_brand, ()))
     match = re.fullmatch(r"([a-z][a-z-]*?)(\d+)", label)
     if match:
         word, digits = match.groups()

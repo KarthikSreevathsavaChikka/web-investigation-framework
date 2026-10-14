@@ -48,3 +48,16 @@ evidence/
 reports/
 *.tar.gz
 .~lock.*#
+
+# Frontend dependencies and generated files
+node_modules/
+*.tsbuildinfo
+
+# Local agent settings and generated artifacts
+.aws/
+.codex/
+.agents/
+artifacts/
+
+# Local documentation is not published to GitHub
+docs/

@@ -1,25 +1,25 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import signal
 import threading
-import uuid
-
-from core.browser_engine import PlaywrightInvestigationEngine
-from core.validator import TargetValidator
-from database.db_manager import DatabaseManager
+from dataclasses import asdict
 from osint.orchestrator import IntelligenceOrchestrator
 from osint.cancellation import InvestigationCancelled
 from osint.models import TargetCandidate, TargetResolution
+from osint.normalizer import target_for_domain
+from osint.resolver import TargetResolver
+from osint.search import build_keyless_search_provider
 from services.jobs.queue import RedisJobQueue
 from services.jobs.repository import JobRepository
+from services.external_processing import execute_external_investigation, send_external_callback
+from virustotal.client import VirusTotalClient, VirusTotalError
+from virustotal.storage import VirusTotalRepository
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("investigation-worker")
 stopping = False
-DEFAULT_DYNAMIC_JOB_TIMEOUT_SECONDS = 900
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 5
 
 
@@ -30,6 +30,26 @@ def _request_stop(*_args) -> None:
 
 def execute_job(job: dict, cancel_check=None) -> dict:
     payload = job["payload"]
+    if job["component"] == "darkweb":
+        from osint.darkweb import collect_darkweb
+        return collect_darkweb(payload, cancel_check)
+    if job["component"] == "external":
+        return execute_external_investigation(payload, cancel_check)
+    if job["component"] == "virustotal":
+        api_key = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("VIRUSTOTAL_API_KEY is not configured in the worker")
+        client = VirusTotalClient(api_key)
+        results = []
+        for domain in payload["domains"]:
+            if cancel_check and cancel_check():
+                raise InvestigationCancelled("VirusTotal batch cancelled by operator")
+            try:
+                results.append({"domain": domain, "status": "COMPLETED", "report": client.lookup(domain), "error": None})
+            except (ValueError, VirusTotalError) as exc:
+                results.append({"domain": domain, "status": "FAILED", "report": None, "error": str(exc)})
+        batch_id = VirusTotalRepository().save_batch(payload.get("brand", ""), payload["domains"], results)
+        return {"batch_id": batch_id, "component": "virustotal", "domain_count": len(results)}
     if job["component"] == "osint":
         resolution_data = payload.get("resolution")
         resolution = None
@@ -41,69 +61,32 @@ def execute_job(job: dict, cancel_check=None) -> dict:
                 resolved_brand=resolution_data["resolved_brand"],
                 candidates=[TargetCandidate(**item) for item in resolution_data.get("candidates", [])],
             )
-        investigation_id = IntelligenceOrchestrator().run(
-            payload["target"],
+        if resolution is None:
+            resolution = TargetResolver().resolve(payload["target"], build_keyless_search_provider())
+        if not resolution.candidates:
+            raise RuntimeError(
+                "No target domain could be resolved. Enter a full domain or refine the brand name."
+            )
+        selected_target = target_for_domain(payload["target"], resolution.candidates[0].domain)
+        orchestrator = IntelligenceOrchestrator()
+        investigation_id = orchestrator.run(
+            selected_target,
             payload["collectors"],
-            brand=payload.get("brand", ""),
+            brand=payload.get("brand") or resolution.resolved_brand,
             resolution=resolution,
             query_budget=int(payload.get("query_budget", 12)),
             cancel_check=cancel_check,
         )
-        return {"investigation_id": investigation_id, "component": "osint"}
+        coverage = orchestrator.repository.get_collection_coverage(investigation_id)
+        return {
+            "investigation_id": investigation_id,
+            "component": "osint",
+            "resolved_target": selected_target,
+            "resolution": asdict(resolution),
+            "coverage": coverage,
+        }
 
-    if job["component"] != "dynamic":
-        raise ValueError(f"Unsupported job component: {job['component']}")
-
-    validation = TargetValidator.validate_url(payload["target"])
-    if not validation.get("valid"):
-        raise ValueError(validation.get("error", "Target URL is not reachable"))
-    investigation_id = f"INV_{uuid.uuid4().hex[:8].upper()}"
-    engine = PlaywrightInvestigationEngine(
-        DatabaseManager(), max_pages=int(payload.get("max_pages", 10))
-    )
-    timeout_seconds = max(
-        30,
-        int(
-            os.getenv(
-                "DYNAMIC_JOB_TIMEOUT_SECONDS",
-                str(DEFAULT_DYNAMIC_JOB_TIMEOUT_SECONDS),
-            )
-        ),
-    )
-
-    async def run_dynamic_investigation() -> dict:
-        task = asyncio.create_task(
-            engine.run_investigation(
-                validation["final_url"],
-                investigation_id,
-                allow_manual_auth=False,
-            )
-        )
-        elapsed = 0
-        while not task.done() and elapsed < timeout_seconds:
-            if cancel_check and cancel_check():
-                engine.request_stop()
-            done, _ = await asyncio.wait({task}, timeout=1)
-            if done:
-                break
-            elapsed += 1
-        if not task.done():
-            task.cancel()
-            raise TimeoutError
-        result = await task
-        if cancel_check and cancel_check():
-            raise InvestigationCancelled("Investigation cancelled by operator")
-        return result
-
-    try:
-        result = asyncio.run(run_dynamic_investigation())
-    except TimeoutError as exc:
-        raise RuntimeError(
-            f"Dynamic investigation exceeded the {timeout_seconds}-second worker limit"
-        ) from exc
-    if result.get("status") == "FAILED":
-        raise RuntimeError(result.get("error", "Dynamic investigation failed"))
-    return {"investigation_id": investigation_id, "component": "dynamic", **result}
+    raise ValueError(f"Unsupported job component: {job['component']}")
 
 
 def run() -> None:
@@ -152,10 +135,11 @@ def run() -> None:
             job = repository.mark_running(job_id)
             logger.info("Running %s job %s for %s", job["component"], job_id, job["target"])
             try:
-                repository.mark_completed(
-                    job_id,
-                    execute_job(job, lambda: queue.cancellation_requested(job_id)),
-                )
+                result = execute_job(job, lambda: queue.cancellation_requested(job_id))
+                if job["component"] == "external":
+                    send_external_callback(job["payload"], "COMPLETED", result=result)
+                    result["callback_delivered"] = True
+                repository.mark_completed(job_id, result)
                 logger.info("Completed job %s", job_id)
             except InvestigationCancelled:
                 logger.info("Cancelled job %s", job_id)
@@ -163,6 +147,11 @@ def run() -> None:
             except Exception as exc:
                 logger.exception("Job %s failed", job_id)
                 repository.mark_failed(job_id, str(exc))
+                if job["component"] == "external":
+                    try:
+                        send_external_callback(job["payload"], "FAILED", error=str(exc))
+                    except Exception:
+                        logger.exception("Unable to deliver failure callback for job %s", job_id)
             finally:
                 queue.acknowledge(job_id)
                 queue.clear_cancellation(job_id)

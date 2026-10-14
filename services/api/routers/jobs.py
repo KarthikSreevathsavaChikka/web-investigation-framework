@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from services.api.dependencies import get_job_queue, get_job_repository
 from services.api.schemas import (
-    DynamicJobRequest,
+    ExternalInvestigationJobRequest,
     JobListResponse,
     JobResponse,
     OSINTJobRequest,
+    DarkwebJobRequest,
+    VirusTotalJobRequest,
 )
 from services.jobs.queue import RedisJobQueue
 from services.jobs.repository import JobRepository
@@ -47,14 +49,42 @@ def create_osint_job(
     return _create_job("osint", request.target, request.model_dump(), repository, queue)
 
 
-@router.post("/dynamic", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
-def create_dynamic_job(
-    request: DynamicJobRequest,
+@router.post("/virustotal", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def create_virustotal_job(
+    request: VirusTotalJobRequest,
     repository: JobRepository = Depends(get_job_repository),
     queue: RedisJobQueue = Depends(get_job_queue),
 ) -> dict:
     _require_authorization(request.authorized)
-    return _create_job("dynamic", request.target, request.model_dump(), repository, queue)
+    domains = list(dict.fromkeys(domain.strip().lower() for domain in request.domains if domain.strip()))
+    if not domains:
+        raise HTTPException(status_code=400, detail="At least one domain is required")
+    payload = request.model_dump()
+    payload["domains"] = domains
+    return _create_job("virustotal", f"{len(domains)} selected domain(s)", payload, repository, queue)
+
+
+@router.post("/darkweb", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def create_darkweb_job(
+    request: DarkwebJobRequest,
+    repository: JobRepository = Depends(get_job_repository),
+    queue: RedisJobQueue = Depends(get_job_queue),
+) -> dict:
+    _require_authorization(request.authorized)
+    return _create_job("darkweb", request.target, request.model_dump(), repository, queue)
+
+
+@router.post("/external", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def create_external_job(
+    request: ExternalInvestigationJobRequest,
+    repository: JobRepository = Depends(get_job_repository),
+    queue: RedisJobQueue = Depends(get_job_queue),
+) -> dict:
+    """Queue one externally identified target for OSINT, VirusTotal, report, and callback."""
+    _require_authorization(request.authorized)
+    payload = request.model_dump()
+    payload["external_job_id"] = payload.pop("job_id")
+    return _create_job("external", request.target, payload, repository, queue)
 
 
 @router.get("", response_model=JobListResponse)

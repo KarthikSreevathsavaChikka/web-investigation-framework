@@ -453,3 +453,837 @@ queries:
     query: >
       ("{domain}" OR "{brand}" OR "{brand} India" OR "{brand} app") filetype:pdf
       ("certificate" OR "licence" OR "license" OR "registration" OR "incorporation" OR "gambling" OR "betting" OR "deposit" OR "withdrawal" OR "payment" OR "wallet" OR "legal notice" OR "blocking order" OR "fraud report" OR "application analysis")
+
+# Reviewed, deduplicated context vocabulary for target-linked evidence scoring.
+# Excluded noise domains are retained only for filtering and never contribute to a score.
+scoring_keywords:
+  gambling_extended:
+  - casino
+  - betting
+  - gambling
+  - sportsbook
+  - poker
+  - roulette
+  - blackjack
+  - slots
+  - slot machine
+  - jackpot
+  - wager
+  - parlay
+  - tipster
+  - bookie
+  - punter
+  - lottery
+  - matka
+  - satta
+  - aviator
+  - jua
+  - daav
+  - shart
+  - andar bahar
+  - teen patti
+  - ipl betting
+  - cricket betting
+  - sure shot
+  - fixed match
+  - match fixing
+  - free spins
+  - freebet
+  - free bet
+  - no deposit
+  - deposit bonus
+  - rakeback
+  - vip betting
+  - 1xbet
+  - bcgame
+  - bc.game
+  - rollbit
+  - roobet
+  - cloudbet
+  - betfury
+  - parimatch
+  - mostbet
+  - melbet
+  - dafabet
+  - 1win
+  - 1 win
+  - jetx
+  - jet x
+  - spribe
+  - crash game
+  - cashout
+  - cash out
+  - color prediction
+  - colour prediction
+  - wingo
+  - tiranga
+  - daman game
+  - jalwa
+  - big small
+  - dragon tiger
+  - lucky jet
+  - plinko
+  - mines game
+  - bet
+  - stake
+  - odds
+  - bonus
+  - promo code
+  - promocode
+  - referral
+  - cashback
+  - guaranteed win
+  - 100% win
+  - money
+  - paisa
+  - deposit
+  - withdraw
+  - withdrawal
+  - wallet
+  - balance
+  - credit
+  - payout
+  - payment
+  - paytm
+  - upi
+  - rummy
+  - chips
+  - multiplier
+  - winnings
+  - spins
+  - promo
+  - सट्टा
+  - जुआ
+  - दांव
+  - शर्त
+  - बेट
+  - ऑड्स
+  - वॉलेट
+  - बैलेंस
+  - क्रेडिट
+  - कॉइन
+  - चिप्स
+  - टोकन
+  - कैशबैक
+  - रेकबैक
+  - पेआउट
+  - भुगतान
+  - जीत
+  - जैकपॉट
+  - इनाम
+  - बोनस
+  - प्रोमो
+  - रिफंड
+  - छूट
+  - फ्री बेट
+  - राशि
+  - पैसा
+  - मुद्रा
+  - लेनदेन
+  - क्रिप्टो
+  - বাজি
+  - জুয়া
+  - ওয়ালেট
+  - ব্যালেন্স
+  - ক্রেডিট
+  - কয়েন
+  - চিপস
+  - টোকেন
+  - ক্যাশব্যাক
+  - রেকব্যাক
+  - পেআউট
+  - পেমেন্ট
+  - জয়
+  - জ্যাকপট
+  - পুরস্কার
+  - বোনাস
+  - প্রোমো
+  - রিফান্ড
+  - ছাড়
+  - ফ্রি বেট
+  - টাকা
+  - মুদ্রা
+  - লেনদেন
+  - ক্রিপ্টো
+  - పందెం
+  - జూదం
+  - వాలెట్
+  - బ్యాలెన్స్
+  - క్రెడిట్
+  - కాయిన్లు
+  - చిప్స్
+  - టోకెన్
+  - క్యాష్‌బ్యాక్
+  - రేక్‌బ్యాక్
+  - పేఅవుట్
+  - చెల్లింపు
+  - గెలుపు
+  - జాక్‌పాట్
+  - రివార్డ్
+  - బోనస్
+  - ప్రోమో
+  - రిఫండ్
+  - ఉచిత బెట్టు
+  - మొత్తం
+  - డబ్బు
+  - కరెన్సీ
+  - లావాదేవీ
+  - క్రిప్టో
+  - பந்தயம்
+  - சூதாட்டம்
+  - வாலட்
+  - இருப்பு
+  - கிரெடிட்
+  - நாணயங்கள்
+  - சிப்ஸ்
+  - டோக்கன்
+  - கேஷ்பேக்
+  - ரேக்பேக்
+  - பேஅவுட்
+  - பணம் செலுத்துதல்
+  - வெற்றி
+  - ஜாக்பாட்
+  - வெகுமதி
+  - போனஸ்
+  - ப்ரோமோ
+  - ரீஃபண்ட்
+  - இலவச பந்தயம்
+  - தொகை
+  - பணம்
+  - நாணயம்
+  - பரிவர்த்தனை
+  - கிரிப்டோ
+  - पैज
+  - जुगार
+  - शिल्लक
+  - नाणी
+  - कॅशबॅक
+  - रेकबॅक
+  - जिंकलेले
+  - जॅकपॉट
+  - बक्षीस
+  - सवलत
+  - मोफत बेट
+  - रक्कम
+  - पैसे
+  - चलन
+  - व्यवहार
+  - શરત
+  - જુગાર
+  - સટ્ટો
+  - વૉલેટ
+  - બેલેન્સ
+  - ક્રેડિટ
+  - સિક્કા
+  - ચિપ્સ
+  - ટોકન
+  - કૅશબૅક
+  - રેકબૅક
+  - પેઆઉટ
+  - ચુકવણી
+  - જીત
+  - જેકપોટ
+  - ઇનામ
+  - બોનસ
+  - પ્રોમો
+  - રિફંડ
+  - છૂટ
+  - ફ્રી બેટ
+  - રકમ
+  - પૈસા
+  - ચલણ
+  - વ્યવહાર
+  - ક્રિપ્ટો
+  - ಪಂತ
+  - ಜೂಜಾಟ
+  - ಬೆಟ್
+  - ವಾಲೆಟ್
+  - ಬ್ಯಾಲೆನ್ಸ್
+  - ಕ್ರೆಡಿಟ್
+  - ನಾಣ್ಯಗಳು
+  - ಚಿಪ್ಸ್
+  - ಟೋಕನ್
+  - ಕ್ಯಾಶ್‌ಬ್ಯಾಕ್
+  - ರೇಕ್‌ಬ್ಯಾಕ್
+  - ಪೇಔಟ್
+  - ಪಾವತಿ
+  - ಗೆಲುವು
+  - ಜಾಕ್‌ಪಾಟ್
+  - ಬಹುಮಾನ
+  - ಬೋನಸ್
+  - ಪ್ರೋಮೋ
+  - ರಿಫಂಡ್
+  - ಉಚಿತ ಬೆಟ್
+  - ಮೊತ್ತ
+  - ಹಣ
+  - ಕರೆನ್ಸಿ
+  - ವಹಿವಾಟು
+  - ಕ್ರಿಪ್ಟೋ
+  - പന്തയം
+  - ചൂതാട്ടം
+  - വാലറ്റ്
+  - ബാലൻസ്
+  - ക്രെഡിറ്റ്
+  - നാണയങ്ങൾ
+  - ചിപ്സ്
+  - ടോക്കൺ
+  - ക്യാഷ്ബാക്ക്
+  - റേക്ക്ബാക്ക്
+  - പേഔട്ട്
+  - പേയ്മെന്റ്
+  - വിജയം
+  - ജാക്ക്പോട്ട്
+  - റിവാർഡ്
+  - ബോണസ്
+  - പ്രൊമോ
+  - റീഫണ്ട്
+  - സൗജന്യ ബെറ്റ്
+  - തുക
+  - പണം
+  - കറൻസി
+  - ഇടപാട്
+  - ക്രിപ്റ്റോ
+  - ਸੱਟਾ
+  - ਜੂਆ
+  - ਸ਼ਰਤ
+  - ਵਾਲਿਟ
+  - ਬੈਲੇਂਸ
+  - ਕ੍ਰੈਡਿਟ
+  - ਸਿੱਕੇ
+  - ਚਿਪਸ
+  - ਟੋਕਨ
+  - ਕੈਸ਼ਬੈਕ
+  - ਰੇਕਬੈਕ
+  - ਪੇਆਉਟ
+  - ਭੁਗਤਾਨ
+  - ਜਿੱਤ
+  - ਜੈਕਪਾਟ
+  - ਇਨਾਮ
+  - ਬੋਨਸ
+  - ਪ੍ਰੋਮੋ
+  - ਰਿਫੰਡ
+  - ਛੋਟ
+  - ਮੁਫ਼ਤ ਬੇਟ
+  - ਰਕਮ
+  - ਪੈਸਾ
+  - ਮੁਦਰਾ
+  - ਲੈਣ-ਦੇਣ
+  - ਕ੍ਰਿਪਟੋ
+  - dream11
+  - my11circle
+  - mpl
+  - mobile premier league
+  - myteam11
+  - playerzpot
+  - ballebaazi
+  - 11wickets
+  - gamezy
+  - real11
+  - winzo
+  - vision11
+  - bet365
+  - betway
+  - betfair
+  - draftkings
+  - fanduel
+  - betmgm
+  - duelbits
+  - gamdom
+  - 10cric
+  - betwinner
+  - megaparimatch
+  - rajabets
+  - linebet
+  - pin-up
+  - pinup casino
+  - pinup Lottery
+  - fairplay
+  - lotus365
+  - skyexchange
+  - diamondexch
+  - reddyanna
+  - mahadev book
+  - lasers247
+  - 22bet
+  - 888sport
+  - unibet
+  - bwin
+  - pinnacle
+  - sbobet
+  - betvictor
+  - betvictor.com
+  - pinnacle.com
+  - fun88
+  - fun88.com
+  - 10bet
+  - 10bet.com
+  - betplay.com
+  - place bet
+  - place a bet
+  - bet slip
+  - my bets
+  - total stake
+  - potential return
+  - join contest
+  - enter contest
+  - create team
+  - select captain
+  - vice captain
+  - prize pool
+  - potential winnings
+  - withdraw winnings
+  - wagering requirement
+  - rollover requirement
+  - my bet history
+  - all bets
+  - slot game
+  - spin wheel
+  - live dealer
+  - baccarat
+  - crazy time
+  - megaways
+  - bonus buy
+  - scatter
+  - wild symbol
+  - live casino
+  - flew away
+  - provably fair
+  - open bets
+  - in play
+  - live betting
+  - market
+  - markets
+  - choose currency
+  - crypto
+  - usdt
+  - usdc
+  - single bet
+  - sports
+  - settled bets
+  - bet builder
+  - accumulator
+  - multiple bet
+  - odds boost
+  - boosted odds
+  - match odds
+  - over/under
+  - both teams to score
+  - draw no bet
+  - asian handicap
+  - double chance
+  - outright winner
+  - first goalscorer
+  - correct score
+  - football
+  - cricket
+  - tennis
+  - basketball
+  - esports
+  - fantasy points
+  - points earned
+  - team preview
+  - match contest
+  - leaderboard
+  - mega contest
+  - head to head
+  crypto:
+  - token
+  - presale
+  - pre-sale
+  - market cap
+  - mcap
+  - liquidity
+  - liquidity pool
+  - airdrop
+  - whitelist
+  - tokenomics
+  - holders
+  - listing
+  - listed on
+  - delisted
+  - dex
+  - cex
+  - defi
+  - staking
+  - yield farm
+  - moonshot
+  - memecoin
+  - meme coin
+  - altcoin
+  - shitcoin
+  - hodl
+  - blockchain
+  - web3
+  - smart contract
+  - contract address
+  - buy signal
+  - trading signal
+  - pump
+  - moon
+  - ath
+  - bullish
+  - bearish
+  - usdt
+  - btc
+  - eth
+  - bnb
+  - sol
+  - bsc
+  - trx
+  - erc20
+  - bep20
+  - crypto wallet
+  - wallet address
+  - public address
+  - private key
+  - seed phrase
+  - recovery phrase
+  - mnemonic
+  - derive address
+  - blockchain network
+  - on chain
+  - off chain
+  - mainnet
+  - testnet
+  - layer 2
+  - sidechain
+  - gas fee
+  - network fee
+  - miner fee
+  - priority fee
+  - gas limit
+  - gas price
+  - tx hash
+  - transaction hash
+  - block height
+  - block number
+  - confirmations
+  - pending confirmation
+  - token contract
+  - abi
+  - interact contract
+  - token balance
+  - wallet balance
+  - available balance
+  - total balance
+  - send crypto
+  - receive crypto
+  - copy address
+  - scan wallet qr
+  - deposit address
+  - withdraw address
+  - select network
+  - network type
+  - trc20
+  - spl
+  - polygon network
+  - solana network
+  - tron network
+  - metamask
+  - trust wallet
+  - phantom wallet
+  - coinbase wallet
+  - exodus wallet
+  - ledger wallet
+  - trezor
+  - binance
+  - coinbase
+  - kraken
+  - kucoin
+  - okx
+  - bybit
+  - bitcoin
+  - ethereum
+  - tether
+  - usdc
+  - solana
+  - polygon
+  - tron
+  - cardano
+  - avalanche
+  - polkadot
+  - ripple
+  - litecoin
+  - dogecoin
+  payment:
+  - ybl
+  - ibl
+  - axl
+  - apl
+  - upi
+  - paytm
+  - ptaxis
+  - ptsbi
+  - ptyes
+  - pthdfc
+  - okaxis
+  - okhdfcbank
+  - okicici
+  - oksbi
+  - yapl
+  - rapl
+  - abfspay
+  - axisbank
+  - hdfcbank
+  - icici
+  - sbi
+  - kotak
+  - yesbank
+  - yesbankltd
+  - indus
+  - idfcbank
+  - idfcfirst
+  - federal
+  - fbl
+  - cnrb
+  - barodampay
+  - barodapay
+  - pnb
+  - unionbank
+  - uboi
+  - ubi
+  - uco
+  - cboi
+  - citi
+  - dbs
+  - rbl
+  - sib
+  - tmb
+  - kbl
+  - kvb
+  - dlb
+  - csbpay
+  - jkb
+  - equitas
+  - ausfb
+  - utbi
+  - allbank
+  - psb
+  - obc
+  - mahb
+  - iob
+  - andb
+  - vijb
+  - corp
+  - syndicate
+  - denabank
+  - slice
+  - jupiteraxis
+  - fam
+  - naviaxis
+  - timecosmos
+  - waaxis
+  - freecharge
+  - airtel
+  - jio
+  - mobikwik
+  - cred
+  - sliceaxis
+  - omni
+  - goaxb
+  - superyes
+  - bank
+  - banking
+  - account
+  - balance
+  - available balance
+  - credit
+  - debit
+  - statement
+  - mini statement
+  - savings
+  - current
+  - deposit
+  - withdraw
+  - loan
+  - interest
+  - emi
+  - ifsc
+  - branch
+  - customer id
+  - account number
+  - net banking
+  - mobile banking
+  - upi id
+  - beneficiary
+  - payee
+  - payer
+  - remitter
+  - receiver
+  - bank name
+  - branch name
+  - account holder
+  - linked account
+  - primary account
+  - available funds
+  - ledger balance
+  - bank server
+  - bank gateway
+  - state bank of india
+  - hdfc bank
+  - hdfc
+  - icici bank
+  - axis bank
+  - axis
+  - kotak mahindra bank
+  - punjab national bank
+  - bank of baroda
+  - bob
+  - canara bank
+  - union bank of india
+  - indusind bank
+  - upi payment
+  - google pay
+  - gpay
+  - phonepe
+  - bhim upi
+  - amazon pay
+  - payment
+  - amount
+  - transfer
+  - cash
+  - payments
+  - pay
+  - payable
+  - send money
+  - receive money
+  - netbanking
+  - debit card
+  - credit card
+  - scan and pay
+  - qr payment
+  - fund transfer
+  - payment page
+  - payment gateway
+  - choose payment method
+  - select bank
+  - redirecting to bank
+  - secure payment
+  transactions:
+  - send
+  - sent
+  - sending
+  - pay now
+  - make payment
+  - transfer funds
+  - transferring
+  - withdraw
+  - withdrawing
+  - debit
+  - credit
+  - credited
+  - debited
+  - authorize payment
+  - confirm payment
+  - approve
+  - approved
+  - enter pin
+  - enter otp
+  - proceed
+  - continue
+  - confirm
+  - confirmation
+  - next
+  - review
+  - authorize
+  - authorise
+  - verify
+  - verification
+  - submit
+  - processing
+  - please wait
+  - redirecting
+  - connecting
+  - requesting payment
+  - waiting for response
+  - payment successful
+  - payment completed
+  - transaction successful
+  - transaction completed
+  - money sent
+  - money received
+  - amount credited
+  - amount debited
+  - transfer completed
+  - successfully paid
+  - payment done
+  - success
+  - completed successfully
+  - payment confirmed
+  - transaction confirmed
+  - status successful
+  - successful
+  - successfully
+  - payment status successful
+  - transaction status successful
+  - completed
+  - utr
+  - rrn
+  - transaction id
+  - reference id
+  - receipt
+  - acknowledgement
+  - acknowledgment
+  - confirmation number
+  - order id
+  - transaction reference
+  - payment reference
+  - receipt number
+  - reference number
+  - txn reference
+  - transaction reference number
+  excluded_noise_domains:
+  - t.me
+  - telegram.me
+  - telegram.org
+  - telegra.ph
+  - telesco.pe
+  - telegram.dog
+  - tg.me
+  - youtube.com
+  - youtu.be
+  - m.youtube.com
+  - x.com
+  - twitter.com
+  - fixupx.com
+  - vxtwitter.com
+  - fxtwitter.com
+  - instagram.com
+  - facebook.com
+  - fb.com
+  - fb.watch
+  - tiktok.com
+  - vm.tiktok.com
+  - reddit.com
+  - redd.it
+  - threads.net
+  - pinterest.com
+  - linkedin.com
+  - snapchat.com
+  - twitch.tv
+  - discord.gg
+  - discord.com
+  - medium.com
+  - whatsapp.com
+  - wa.me
+  - chat.whatsapp.com
+  - signal.me
+  - google.com
+  - docs.google.com
+  - drive.google.com
+  - forms.gle
+  - goo.gl
+  - github.com
+  - gist.github.com
+  - wikipedia.org
+  - en.wikipedia.org
+  - apple.com
+  - apps.apple.com
+  - play.google.com
+  - microsoft.com
+  - amazon.com
+  - imgur.com
+  - gmail.com
+  - yahoo.com
+  - cloudflare.com
+  - archive.org

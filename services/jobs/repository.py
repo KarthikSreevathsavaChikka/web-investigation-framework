@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
+from core.time_utils import now_ist
 from database.connection import connect_database
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return now_ist().isoformat(timespec="seconds")
 
 
 class JobRepository:

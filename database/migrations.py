@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from database.connection import is_postgresql_connection
+from core.time_utils import now_ist
 
 
 OSINT_SCHEMA_LOCK_ID = 872_041_903
@@ -47,5 +48,5 @@ def record_schema_version(connection, component: str, version: int) -> None:
     connection.execute(
         """INSERT OR IGNORE INTO schema_migrations (component, version, applied_at)
         VALUES (?, ?, ?)""",
-        (component, version, datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        (component, version, now_ist().isoformat(timespec="seconds")),
     )

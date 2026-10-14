@@ -4,9 +4,13 @@ import shutil
 import subprocess
 import tempfile
 import hashlib
+import re
+from xml.etree import ElementTree
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+
+from PIL import Image, ImageDraw
 
 from osint.models import NormalizedTarget
 from osint.relevance import build_target_variants, find_target_reference, target_keyword_proximity
@@ -53,7 +57,12 @@ def extract_pdf_pages(content: bytes, timeout: int = 20) -> list[str]:
         )
     if completed.returncode != 0:
         return []
-    return completed.stdout.decode("utf-8", errors="replace").split("\f")
+    pages = completed.stdout.decode("utf-8", errors="replace").split("\f")
+    # pdftotext terminates its output with a form-feed.  That delimiter is not
+    # an additional PDF page and previously inflated the page count by one.
+    if pages and not pages[-1].strip():
+        pages.pop()
+    return pages
 
 
 def assess_pdf(content: bytes, target: NormalizedTarget, evidence_keywords: list[str] | tuple[str, ...]) -> DocumentAssessment:
@@ -122,18 +131,11 @@ def assess_document_pages(
         (category for category, terms in DOCUMENT_CATEGORIES if any(term in full_text for term in terms)),
         "Other Target-Related Document",
     )
-    if keywords and not matches:
-        first_page, first_variant = target_hits[0]
-        text = " ".join(pages[first_page - 1].split())
-        index = text.casefold().find(first_variant.casefold())
-        context = text[max(0, index - 180):index + len(first_variant) + 360]
+    if not matches:
         return DocumentAssessment(
-            True,
+            False,
             document_type=document_type,
-            matched_target_variant=first_variant,
-            relevant_pages=(first_page,),
-            evidence_context=clean_evidence_text(f"Page {first_page}: {context}", limit=12_000),
-            reason="Verified target reference; no configured evidence term occurred within the proximity limit",
+            reason="Target reference found, but no configured evidence term occurred within the proximity limit",
             page_count=len(pages),
         )
     return DocumentAssessment(
@@ -148,8 +150,101 @@ def assess_document_pages(
     )
 
 
-def render_pdf_pages(pdf_path: str | Path, page_numbers: tuple[int, ...], output_dir: str | Path) -> list[dict]:
-    """Render every requested PDF page in one Poppler invocation."""
+def _pdf_word_boxes(
+    pdf_path: str | Path,
+    requested_pages: set[int],
+    timeout: int,
+) -> dict[int, dict]:
+    """Extract positioned PDF words for deterministic screenshot highlighting."""
+    executable = shutil.which("pdftotext")
+    if not executable:
+        return {}
+    completed = subprocess.run(
+        [executable, "-bbox-layout", str(pdf_path), "-"],
+        capture_output=True,
+        check=False,
+        timeout=timeout,
+    )
+    if completed.returncode != 0:
+        return {}
+    try:
+        root = ElementTree.fromstring(completed.stdout)
+    except ElementTree.ParseError:
+        return {}
+    pages: dict[int, dict] = {}
+    for page_number, page in enumerate(root.findall(".//{*}page"), 1):
+        if page_number not in requested_pages:
+            continue
+        words = []
+        for word in page.findall(".//{*}word"):
+            text = "".join(word.itertext()).strip()
+            try:
+                box = tuple(float(word.attrib[name]) for name in ("xMin", "yMin", "xMax", "yMax"))
+            except (KeyError, ValueError):
+                continue
+            if text:
+                words.append((text, box))
+        pages[page_number] = {
+            "width": float(page.attrib.get("width", 1)),
+            "height": float(page.attrib.get("height", 1)),
+            "words": words,
+        }
+    return pages
+
+
+def _highlight_pdf_terms(image_path: Path, page_data: dict, terms: tuple[str, ...]) -> int:
+    """Highlight exact single- or multi-word target variants on a rendered PDF page."""
+    normalized_terms = {
+        re.sub(r"[^a-z0-9]+", "", term.casefold())
+        for term in terms
+        if re.sub(r"[^a-z0-9]+", "", term.casefold())
+    }
+    if not normalized_terms or not page_data.get("words"):
+        return 0
+    words = page_data["words"]
+    matches: list[tuple[float, float, float, float]] = []
+    for start in range(len(words)):
+        combined = ""
+        boxes = []
+        for index in range(start, min(start + 6, len(words))):
+            combined += re.sub(r"[^a-z0-9]+", "", words[index][0].casefold())
+            boxes.append(words[index][1])
+            if combined in normalized_terms:
+                matches.append((
+                    min(box[0] for box in boxes),
+                    min(box[1] for box in boxes),
+                    max(box[2] for box in boxes),
+                    max(box[3] for box in boxes),
+                ))
+            if not any(term.startswith(combined) for term in normalized_terms):
+                break
+    if not matches:
+        return 0
+    with Image.open(image_path) as source:
+        image = source.convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    scale_x = image.width / max(float(page_data.get("width", 1)), 1)
+    scale_y = image.height / max(float(page_data.get("height", 1)), 1)
+    for x_min, y_min, x_max, y_max in matches:
+        box = (
+            max(0, int(x_min * scale_x) - 4),
+            max(0, int(y_min * scale_y) - 3),
+            min(image.width, int(x_max * scale_x) + 4),
+            min(image.height, int(y_max * scale_y) + 3),
+        )
+        draw.rectangle(box, fill=(255, 235, 59, 90), outline=(255, 59, 48, 255), width=4)
+    Image.alpha_composite(image, overlay).convert("RGB").save(image_path, "PNG")
+    return len(matches)
+
+
+def render_pdf_pages(
+    pdf_path: str | Path,
+    page_numbers: tuple[int, ...],
+    output_dir: str | Path,
+    highlight_terms: tuple[str, ...] = (),
+) -> list[dict]:
+    """Render requested PDF pages and highlight verified target references."""
     executable = shutil.which("pdftoppm")
     if not executable:
         return []
@@ -158,31 +253,74 @@ def render_pdf_pages(pdf_path: str | Path, page_numbers: tuple[int, ...], output
     requested = tuple(sorted({number for number in page_numbers if number > 0}))
     if not requested:
         return []
-    prefix = destination / "page"
-    completed = subprocess.run(
-        [
-            executable, "-f", str(requested[0]), "-l", str(requested[-1]),
-            "-png", "-r", "144", str(pdf_path), str(prefix),
-        ],
-        capture_output=True,
-        check=False,
-        timeout=max(30, len(requested) * 10),
-    )
     captures = []
-    if completed.returncode != 0:
-        return captures
     requested_set = set(requested)
-    for image_path in sorted(destination.glob("page-*.png")):
-        try:
-            page_number = int(image_path.stem.rsplit("-", 1)[1])
-        except (IndexError, ValueError):
+    word_boxes = _pdf_word_boxes(
+        pdf_path,
+        requested_set,
+        timeout=max(30, len(requested) * 10),
+    ) if highlight_terms else {}
+    # Render one page per process.  A single pdftoppm invocation can hold every
+    # rendered page in memory and be killed for otherwise valid large PDFs.
+    for page_number in requested:
+        prefix = destination / f"page-{page_number}"
+        completed = subprocess.run(
+            [
+                executable, "-f", str(page_number), "-l", str(page_number),
+                "-singlefile", "-png", "-r", "144", str(pdf_path), str(prefix),
+            ],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        image_path = prefix.with_suffix(".png")
+        if completed.returncode != 0 or not image_path.is_file():
             continue
-        if page_number not in requested_set:
-            continue
+        highlight_count = _highlight_pdf_terms(
+            image_path,
+            word_boxes.get(page_number, {}),
+            highlight_terms,
+        )
         content = image_path.read_bytes()
         captures.append({
             "page": page_number,
             "path": str(image_path),
             "sha256": hashlib.sha256(content).hexdigest(),
+            "highlighted_target_matches": highlight_count,
         })
     return captures
+
+
+def render_docx_pages(
+    docx_path: str | Path,
+    output_dir: str | Path,
+    target: NormalizedTarget,
+    evidence_keywords: list[str] | tuple[str, ...],
+) -> list[dict]:
+    """Render only context-validated DOCX pages through a temporary PDF conversion."""
+    office = shutil.which("libreoffice") or shutil.which("soffice")
+    if not office:
+        return []
+    source = Path(docx_path)
+    if not source.is_file():
+        return []
+    with tempfile.TemporaryDirectory(prefix="osint_docx_render_") as temp_dir:
+        converted_dir = Path(temp_dir) / "converted"
+        converted_dir.mkdir()
+        try:
+            completed = subprocess.run(
+                [office, "--headless", "--convert-to", "pdf", "--outdir", str(converted_dir), str(source)],
+                capture_output=True, check=False, timeout=60, cwd=temp_dir,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        pdf_path = converted_dir / f"{source.stem}.pdf"
+        if completed.returncode != 0 or not pdf_path.is_file():
+            return []
+        assessment = assess_pdf(pdf_path.read_bytes(), target, evidence_keywords)
+        if not assessment.accepted:
+            return []
+        return render_pdf_pages(
+            pdf_path, assessment.relevant_pages, output_dir,
+            highlight_terms=tuple(dict.fromkeys((assessment.matched_target_variant, *assessment.matched_keywords))),
+        )

@@ -5,11 +5,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends poppler-utils libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -c "from pathlib import Path; from playwright.sync_api import sync_playwright; p = sync_playwright().start(); assert Path(p.chromium.executable_path).is_file(), 'Playwright browser image and package versions must match'; p.stop()"
 
 COPY . .
-RUN mkdir -p /app/data /app/screenshots /app/evidence /app/reports \
+RUN mkdir -p /app/data /app/evidence /app/reports \
     && useradd --create-home --uid 10001 investigator \
     && chown -R investigator:investigator /app
 

@@ -38,9 +38,38 @@ class DorkGenerator:
         "jackpot", "roulette", "baccarat", "blackjack", "poker", "teen patti", "andar bahar",
         "aviator", "crash game", "lottery", "winnings", "payout", "bonus", "free bet",
     )
-
     def __init__(self, config_path: Path | str | None = None):
         self.config_path = Path(config_path or BASE_DIR / "config" / "search_queries.yaml")
+        self._scoring_catalog: dict[str, tuple[str, ...]] | None = None
+
+    def scoring_catalog(self) -> dict[str, tuple[str, ...]]:
+        """Load reviewed scoring vocabulary without treating common platforms as evidence."""
+        if self._scoring_catalog is not None:
+            return self._scoring_catalog
+        try:
+            payload = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise QueryConfigurationError(f"Unable to load scoring keywords: {exc}") from exc
+        raw_groups = payload.get("scoring_keywords", {})
+        if not isinstance(raw_groups, dict):
+            raise QueryConfigurationError("search_queries.yaml must contain a 'scoring_keywords' mapping.")
+        self._scoring_catalog = {
+            str(name): tuple(str(value) for value in values)
+            for name, values in raw_groups.items()
+            if isinstance(values, list) and name != "excluded_noise_domains"
+        }
+        return self._scoring_catalog
+
+    def _context_keywords_for_category(self, category: str) -> tuple[str, ...]:
+        catalog = self.scoring_catalog()
+        groups: list[str] = []
+        if category in {"gambling_activity", "promotions", "support_social", "applications", "external_evidence"}:
+            groups.append("gambling_extended")
+        if category in {"money_flow", "payment_methods", "payment_proof", "external_evidence", "external_complaints"}:
+            groups.extend(("payment", "transactions"))
+        if category in {"money_flow", "payment_methods", "payment_proof", "external_evidence"}:
+            groups.append("crypto")
+        return tuple(keyword for group in groups for keyword in catalog.get(group, ()))
 
     def load(self) -> list[dict]:
         if not self.config_path.exists():
@@ -80,7 +109,11 @@ class DorkGenerator:
             except KeyError as exc:
                 raise QueryConfigurationError(f"Unknown placeholder in {entry['id']}: {exc}") from exc
             configured_keywords = entry.get("evidence_keywords") or self._derive_keywords(str(entry["query"]))
-            configured_keywords = list(configured_keywords) + list(self.GAMBLING_EVIDENCE_KEYWORDS)
+            configured_keywords = (
+                list(configured_keywords)
+                + list(self.GAMBLING_EVIDENCE_KEYWORDS)
+                + list(self._context_keywords_for_category(str(entry["category"])))
+            )
             queries.append(
                 DorkQuery(
                     query_id=str(entry["id"]),

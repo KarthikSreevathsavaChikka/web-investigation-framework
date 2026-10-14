@@ -5,7 +5,7 @@ from services.api.routers import health, investigations, jobs
 app = FastAPI(
     title="Web Investigation Framework API",
     version="0.1.0",
-    description="Versioned service boundary for Dynamic Investigation and passive OSINT data.",
+    description="Versioned service boundary for web scraping, OSINT, VirusTotal, and external jobs.",
 )
 app.include_router(health.router)
 app.include_router(investigations.router)

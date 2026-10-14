@@ -3,13 +3,15 @@ from __future__ import annotations
 from osint.collectors.base import Collector, CollectorContext
 from osint.http import get_public_url
 from osint.models import NormalizedTarget, Observation
+from osint.url_tools import registrable_domain
 
 
 class RDAPCollector(Collector):
     name = "rdap"
 
     def collect(self, target: NormalizedTarget, context: CollectorContext) -> list[Observation]:
-        source = f"https://rdap.org/domain/{target.domain}"
+        domain = registrable_domain(target.domain) or target.domain
+        source = f"https://rdap.org/domain/{domain}"
         response = get_public_url(
             source,
             headers={"Accept": "application/rdap+json", "User-Agent": "Web-Investigator-OSINT/1.0"},

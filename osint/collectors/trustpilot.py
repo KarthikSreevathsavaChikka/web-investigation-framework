@@ -10,22 +10,17 @@ from pathlib import Path
 from urllib.parse import quote, urljoin, urlsplit
 
 from config import EVIDENCE_DIR
+from core.screenshot_readiness import wait_for_viewport_readiness
 from core.playwright_session import close_browser_session, launch_browser_session
 from osint.cancellation import InvestigationCancelled
 from osint.collectors.base import Collector, CollectorContext
 from osint.models import NormalizedTarget, Observation
+from osint.relevance import build_target_variants
 from osint.url_tools import normalize_result_url
 
 
 def trustpilot_target_variants(target: NormalizedTarget) -> tuple[str, ...]:
-    values = {
-        target.domain.casefold(),
-        target.domain.removeprefix("www.").casefold(),
-        target.domain.split(".")[0].casefold(),
-    }
-    if target.brand.strip():
-        values.add(target.brand.strip().casefold())
-    return tuple(sorted((value for value in values if len(value) >= 3), key=len, reverse=True))
+    return build_target_variants(target)
 
 
 def trustpilot_profile_matches(href: str, text: str, target: NormalizedTarget) -> str:
@@ -108,7 +103,8 @@ class TrustpilotCollector(Collector):
                     if context.cancellation_requested():
                         raise InvestigationCancelled("Investigation cancelled during Trustpilot collection")
                     screenshot_path = output_dir / f"profile_{profile_index:02d}_scroll_{scroll_index + 1:03d}.png"
-                    await page.screenshot(path=str(screenshot_path), full_page=False)
+                    await wait_for_viewport_readiness(page, "article")
+                    await page.screenshot(path=str(screenshot_path), full_page=False, animations="disabled")
                     screenshot_sha256 = hashlib.sha256(screenshot_path.read_bytes()).hexdigest()
                     articles = page.locator("article")
 

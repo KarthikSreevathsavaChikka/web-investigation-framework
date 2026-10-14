@@ -11,10 +11,14 @@ from pathlib import Path
 from urllib.parse import quote, quote_plus, urljoin
 
 from config import DATA_DIR, EVIDENCE_DIR
+from core.screenshot_readiness import wait_for_viewport_readiness
 from core.playwright_session import close_browser_session, launch_browser_session
 from osint.cancellation import InvestigationCancelled
 from osint.collectors.base import Collector, CollectorContext
-from osint.collectors.x_authenticated import post_matches_target
+from osint.collectors.social_capture import (
+    acquire_social_lock, enrich_social_findings, install_navigation_guard, validate_social_page,
+)
+from osint.collectors.x_authenticated import post_matches_target, social_search_query
 from osint.models import NormalizedTarget, Observation
 from osint.url_tools import normalize_result_url
 
@@ -72,7 +76,7 @@ PLATFORMS = {
         label="Quora",
         home_url="https://www.quora.com/",
         search_url="https://www.quora.com/search?q={query}",
-        result_selector='div[role="main"] div.q-box.qu-borderBottom, div[role="main"] div.q-box',
+        result_selector='div[role="main"] div.q-box.qu-borderBottom, [data-testid="search_result"]',
         link_selector='a[href^="/"], a[href*="quora.com/"]',
         login_markers=("/login",),
     ),
@@ -107,7 +111,7 @@ class AuthenticatedSocialCollector(Collector):
         lock_path = EVIDENCE_DIR / "social" / self.platform_key / ".collector.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("w") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            acquire_social_lock(lock_file, context)
             try:
                 return asyncio.run(self._collect(target, context))
             finally:
@@ -115,7 +119,7 @@ class AuthenticatedSocialCollector(Collector):
 
     async def _collect(self, target: NormalizedTarget, context: CollectorContext) -> list[Observation]:
         resources = None
-        query = target.brand.strip() or target.domain
+        query = social_search_query(target)
         prefix = self.platform_key.upper()
         max_scrolls = max(1, min(int(os.getenv(f"{prefix}_MAX_SCROLLS", "8")), 50))
         max_items = max(1, min(int(os.getenv(f"{prefix}_MAX_ITEMS", "60")), 300))
@@ -131,6 +135,8 @@ class AuthenticatedSocialCollector(Collector):
         output_dir.mkdir(parents=True, exist_ok=True)
         observations: list[Observation] = []
         seen_urls: set[str] = set()
+        result_cards_seen = 0
+        extraction_errors = 0
 
         try:
             resources = await launch_browser_session(
@@ -139,8 +145,16 @@ class AuthenticatedSocialCollector(Collector):
                 storage_state=str(self.session_path),
             )
             page = await resources.context.new_page()
+            await install_navigation_guard(page, self.platform_key)
             search_url = await self._open_search(page, query)
             await self._validate_session(page)
+            if self.platform_key == "instagram":
+                try:
+                    await page.wait_for_selector(self.platform.result_selector, timeout=10_000)
+                except Exception:
+                    pass
+                capture_delay_ms = max(3_000, min(int(os.getenv("INSTAGRAM_CAPTURE_DELAY_MS", "3500")), 10_000))
+                await page.wait_for_timeout(capture_delay_ms)
 
             stable_scrolls = 0
             previous_height = 0
@@ -150,14 +164,21 @@ class AuthenticatedSocialCollector(Collector):
                         f"Investigation cancelled during {self.platform.label} collection"
                     )
                 screenshot_path = output_dir / f"scroll_{scroll_index + 1:03d}.png"
-                await page.screenshot(path=str(screenshot_path), full_page=False)
+                await wait_for_viewport_readiness(page, self.platform.result_selector)
+                await page.screenshot(path=str(screenshot_path), full_page=False, animations="disabled")
                 screenshot_sha256 = hashlib.sha256(screenshot_path.read_bytes()).hexdigest()
                 items = page.locator(self.platform.result_selector)
-
-                for index in range(await items.count()):
+                count = await items.count()
+                result_cards_seen += count
+                for index in range(count):
+                    if context.cancellation_requested():
+                        raise InvestigationCancelled(f"Investigation cancelled during {self.platform.label} extraction")
                     item = items.nth(index)
                     try:
                         text = await self._result_text(item)
+                        if not text:
+                            extraction_errors += 1
+                            continue
                         matched = post_matches_target(text, target)
                         if not matched:
                             continue
@@ -166,6 +187,7 @@ class AuthenticatedSocialCollector(Collector):
                             link = item.locator(self.platform.link_selector)
                             href = await link.first.get_attribute("href") if await link.count() else None
                         if not href:
+                            extraction_errors += 1
                             continue
                         item_url = self._normalize_platform_url(href)
                         if item_url in seen_urls:
@@ -182,7 +204,7 @@ class AuthenticatedSocialCollector(Collector):
                                 entity_type="AUTOMATED_SOCIAL_FINDING",
                                 value=title,
                                 source_url=item_url,
-                                confidence=0.9,
+                                confidence=0.65,
                                 metadata={
                                     "platform": self.platform.label,
                                     "title": title,
@@ -193,7 +215,7 @@ class AuthenticatedSocialCollector(Collector):
                                     "search_engine": f"{self.platform_key}_authenticated_browser",
                                     "query_id": f"{prefix}-DIRECT",
                                     "rank": len(seen_urls),
-                                    "status": "authenticated_page_captured",
+                                    "status": "search_snippet_captured",
                                     "screenshot_paths": [str(screenshot_path)],
                                     "screenshot_sha256": screenshot_sha256,
                                     "search_url": search_url,
@@ -202,10 +224,15 @@ class AuthenticatedSocialCollector(Collector):
                             )
                         )
                         if len(seen_urls) >= max_items:
-                            return observations
+                            break
+                    except InvestigationCancelled:
+                        raise
                     except Exception:
+                        extraction_errors += 1
                         continue
 
+                if len(seen_urls) >= max_items:
+                    break
                 height = await page.evaluate("document.documentElement.scrollHeight")
                 stable_scrolls = stable_scrolls + 1 if height <= previous_height else 0
                 if stable_scrolls >= 2:
@@ -213,6 +240,25 @@ class AuthenticatedSocialCollector(Collector):
                 previous_height = height
                 await page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
                 await page.wait_for_timeout(scroll_wait_ms)
+            diagnostics = await validate_social_page(page, self.platform_key, result_cards_seen)
+            diagnostics.update({"platform": self.platform.label, "platform_key": self.platform_key,
+                                "result_cards_seen": result_cards_seen, "matched_findings": len(observations),
+                                "extraction_errors": extraction_errors})
+            diagnostics.update(await enrich_social_findings(
+                resources.context, self.platform_key, observations, context, output_dir,
+            ))
+            for observation in observations:
+                observation.metadata["authentication"] = diagnostics["authentication"]
+                if observation.metadata.get("capture_status") == "captured":
+                    matched = post_matches_target(observation.metadata["post_text"], target)
+                    observation.metadata["detail_matched_target_variant"] = matched
+                    if not matched:
+                        observation.confidence = 0.5
+            observations.append(Observation(
+                collector=self.name, category="Collection diagnostics", entity_type="SOCIAL_COLLECTION_DIAGNOSTIC",
+                value=f"{self.platform.label} search and post-capture coverage", source_url=search_url,
+                confidence=0.0, metadata=diagnostics,
+            ))
             return observations
         finally:
             await close_browser_session(resources)
@@ -240,18 +286,8 @@ class AuthenticatedSocialCollector(Collector):
         return f"https://web.telegram.org/k/#?q={quote(query)}"
 
     async def _validate_session(self, page) -> None:
-        current = page.url.casefold()
-        if any(marker.casefold() in current for marker in self.platform.login_markers):
-            raise RuntimeError(
-                f"The saved {self.platform.label} session has expired. Run the session setup command again."
-            )
-        body = (await page.locator("body").inner_text(timeout=5000)).casefold()[:5000]
-        blocked = ("captcha", "too many requests", "verify you are human", "access denied")
-        if any(marker in body for marker in blocked):
-            raise RuntimeError(
-                f"{self.platform.label} blocked or challenged the browser request. "
-                "Collection stopped without attempting to bypass the restriction."
-            )
+        count = await page.locator(self.platform.result_selector).count()
+        await validate_social_page(page, self.platform_key, count or None)
 
     async def _result_text(self, item) -> str:
         parts = [(await item.inner_text(timeout=3000)).strip()]

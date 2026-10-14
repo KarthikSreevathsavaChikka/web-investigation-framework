@@ -1,5 +1,4 @@
 import streamlit as st
-from config import CATEGORY_COLORS_HEX
 
 def inject_custom_css():
     """Injects custom modern dark theme CSS styling with glassmorphism effects."""
@@ -93,48 +92,3 @@ def inject_custom_css():
         }
         </style>
     """, unsafe_allow_html=True)
-
-def render_metric_card(label: str, value: str, icon: str):
-    """Renders styled metric card widget."""
-    st.markdown(f"""
-        <div class="metric-card">
-            <div style="font-size: 1.5rem; margin-bottom: 0.2rem;">{icon}</div>
-            <div class="metric-value">{value}</div>
-            <div class="metric-label">{label}</div>
-        </div>
-    """, unsafe_allow_html=True)
-
-def render_priority_badge(priority: str) -> str:
-    """Returns HTML snippet for priority badge."""
-    p_lower = priority.lower()
-    if p_lower == "high":
-        return '<span class="badge-high">HIGH</span>'
-    elif p_lower == "medium":
-        return '<span class="badge-medium">MEDIUM</span>'
-    else:
-        return '<span class="badge-low">LOW</span>'
-
-def render_bounding_legend():
-    """Renders Bounding Box Legend for OpenCV screenshots."""
-    st.markdown("### 🎨 Evidence Bounding Box Legend")
-    cols = st.columns(5)
-    
-    with cols[0]:
-        st.markdown(f'<div style="color:{CATEGORY_COLORS_HEX["Financial"]}; font-weight:bold;">🟢 Financial Keywords</div>', unsafe_allow_html=True)
-        st.caption("Deposit, Withdraw, Wallet, Cashier, Balance")
-        
-    with cols[1]:
-        st.markdown(f'<div style="color:{CATEGORY_COLORS_HEX["Gaming"]}; font-weight:bold;">🔵 Gaming Keywords</div>', unsafe_allow_html=True)
-        st.caption("Casino, Slots, Sports, Odds, Matches")
-
-    with cols[2]:
-        st.markdown(f'<div style="color:{CATEGORY_COLORS_HEX["Rewards"]}; font-weight:bold;">🟡 Rewards Keywords</div>', unsafe_allow_html=True)
-        st.caption("Bonus, Referral, Cashback, Free Bet")
-
-    with cols[3]:
-        st.markdown(f'<div style="color:{CATEGORY_COLORS_HEX["Payment_Indicator"]}; font-weight:bold;">🔴 Payment Indicators</div>', unsafe_allow_html=True)
-        st.caption("UPI VPA, Gateways, QR Codes, Bank Details")
-
-    with cols[4]:
-        st.markdown(f'<div style="color:{CATEGORY_COLORS_HEX["Legal"]}; font-weight:bold;">🟣 Legal & Auth</div>', unsafe_allow_html=True)
-        st.caption("KYC, Login, Terms, License, AML")

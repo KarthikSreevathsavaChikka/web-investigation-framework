@@ -50,13 +50,13 @@ class FrameworkAPIClientTests(unittest.TestCase):
         self.assertTrue(options["json"]["authorized"])
         self.assertEqual(options["json"]["resolution"]["original_input"], "Example")
 
-    def test_submits_dynamic_job_and_reads_status(self):
-        session = FakeSession(FakeResponse({"id": "JOB_2", "status": "RUNNING"}))
+    def test_submits_selected_domains_as_one_virustotal_batch(self):
+        session = FakeSession(FakeResponse({"id": "JOB_VT", "status": "QUEUED"}))
         client = FrameworkAPIClient("http://api:8000", session=session)
-        client.submit_dynamic("https://example.com", 5, authorized=True)
-        client.get_job("JOB_2")
-        self.assertEqual(session.calls[0][2]["json"]["max_pages"], 5)
-        self.assertEqual(session.calls[1][1], "http://api:8000/api/v1/jobs/JOB_2")
+        client.submit_virustotal(["one.example", "two.example"], brand="Example", authorized=True)
+        method, url, options = session.calls[0]
+        self.assertEqual((method, url), ("POST", "http://api:8000/api/v1/jobs/virustotal"))
+        self.assertEqual(options["json"]["domains"], ["one.example", "two.example"])
 
     def test_surfaces_fastapi_error_detail(self):
         session = FakeSession(FakeResponse({"detail": "Queue unavailable"}, status_code=503))
@@ -73,6 +73,13 @@ class FrameworkAPIClientTests(unittest.TestCase):
             session.calls[0][:2],
             ("POST", "http://api:8000/api/v1/jobs/JOB_4/cancel"),
         )
+
+    def test_lists_jobs_with_the_configured_limit(self):
+        session = FakeSession(FakeResponse({"items": [{"id": "JOB_5"}], "total": 1}))
+        client = FrameworkAPIClient("http://api:8000", session=session)
+        self.assertEqual(client.list_jobs(limit=200), [{"id": "JOB_5"}])
+        self.assertEqual(session.calls[0][:2], ("GET", "http://api:8000/api/v1/jobs"))
+        self.assertEqual(session.calls[0][2]["params"], {"limit": 200})
 
 
 if __name__ == "__main__":

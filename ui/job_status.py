@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
+from core.time_utils import parse_timestamp
 from ui.api_client import APIClientError, FrameworkAPIClient
 
 
@@ -16,7 +17,7 @@ def status_label(status: str) -> str:
     return {
         "QUEUED": "Waiting for an available worker",
         "RUNNING": "Investigation worker is collecting evidence",
-        "COMPLETED": "Investigation completed",
+        "COMPLETED": "Processing finished; review collection coverage",
         "FAILED": "Investigation failed",
         "CANCELLING": "Cancellation requested; stopping safely",
         "CANCELLED": "Investigation cancelled",
@@ -24,9 +25,7 @@ def status_label(status: str) -> str:
 
 
 def _parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parse_timestamp(value)
 
 
 def _format_seconds(seconds: float) -> str:
@@ -70,53 +69,6 @@ def cancel_button(job: dict, *, key_prefix: str) -> None:
 
 
 @st.fragment(run_every="2s")
-def render_dynamic_job_status() -> None:
-    job_id = st.session_state.get("dynamic_job_id")
-    if not job_id:
-        return
-    try:
-        job = get_api_client().get_job(job_id)
-    except APIClientError as exc:
-        st.error(f"Could not refresh job `{job_id}`: {exc}")
-        return
-
-    status = job["status"]
-    with st.container(border=True):
-        st.caption(f"Queued job `{job_id}`")
-        if status in {"QUEUED", "RUNNING", "CANCELLING"}:
-            st.status(status_label(status), state="running")
-            st.caption(job_timing(job))
-            cancel_button(job, key_prefix="cancel_dynamic")
-        elif status == "FAILED":
-            st.error(job.get("error") or "The worker could not complete this investigation.")
-        elif status == "CANCELLED":
-            st.warning(status_label(status))
-        else:
-            st.success(status_label(status))
-            st.caption(job_timing(job))
-
-    if status == "COMPLETED":
-        investigation_id = job.get("result", {}).get("investigation_id")
-        st.session_state.dynamic_job_id = None
-        st.session_state.current_inv_id = investigation_id
-        st.session_state.status = "completed"
-        st.session_state.dynamic_notice = f"Queued investigation completed: `{investigation_id}`"
-        st.rerun()
-    if status == "FAILED":
-        st.session_state.dynamic_job_id = None
-        st.session_state.status = "failed"
-        st.session_state.dynamic_notice = (
-            f"Queued investigation failed: {job.get('error') or 'Unknown worker error'}"
-        )
-        st.rerun()
-    if status == "CANCELLED":
-        st.session_state.dynamic_job_id = None
-        st.session_state.status = "cancelled"
-        st.session_state.dynamic_notice = "Queued investigation was cancelled."
-        st.rerun()
-
-
-@st.fragment(run_every="2s")
 def render_osint_job_status() -> None:
     job_ids = st.session_state.get("osint_job_ids", [])
     if not job_ids:
@@ -139,6 +91,9 @@ def render_osint_job_status() -> None:
                 f"{running} running · {len(active) - running} waiting",
                 state="running",
             )
+        partial = [job for job in completed if job.get("result", {}).get("coverage", {}).get("status") == "PARTIAL"]
+        if partial:
+            st.warning(f"{len(partial)} finished job(s) have incomplete collection. Review report diagnostics.")
         if failed:
             st.error(f"{len(failed)} job(s) failed. Expand job details for the recorded errors.")
         with st.expander("Job details"):
@@ -168,7 +123,7 @@ def render_osint_job_status() -> None:
         if investigation_ids:
             st.session_state.osint_current_investigation = investigation_ids[-1]
             st.session_state.osint_notice = (
-                f"Completed {len(investigation_ids)} queued evidence investigation(s). "
+                f"Finished processing {len(investigation_ids)} investigation(s); review report coverage. "
                 f"Latest: `{investigation_ids[-1]}`"
             )
         st.rerun()

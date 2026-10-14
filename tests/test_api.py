@@ -3,26 +3,11 @@ import unittest
 from fastapi.testclient import TestClient
 
 from services.api.dependencies import (
-    get_dynamic_repository,
     get_job_queue,
     get_job_repository,
     get_osint_repository,
 )
 from services.api.main import app
-
-
-class FakeDynamicRepository:
-    def get_all_investigations(self):
-        return [{
-            "id": "DYNAMIC_1", "website_url": "https://example.com",
-            "start_time": "2026-08-27T10:00:00", "end_time": None,
-            "investigation_status": "COMPLETED",
-        }]
-
-    def get_investigation_summary(self, investigation_id):
-        if investigation_id != "DYNAMIC_1":
-            return {"investigation": {}}
-        return {"investigation": self.get_all_investigations()[0], "pages_visited": 3}
 
 
 class FakeOSINTRepository:
@@ -99,7 +84,6 @@ class APITests(unittest.TestCase):
     def setUpClass(cls):
         cls.jobs = FakeJobRepository()
         cls.queue = FakeJobQueue()
-        app.dependency_overrides[get_dynamic_repository] = FakeDynamicRepository
         app.dependency_overrides[get_osint_repository] = FakeOSINTRepository
         app.dependency_overrides[get_job_repository] = lambda: cls.jobs
         app.dependency_overrides[get_job_queue] = lambda: cls.queue
@@ -114,10 +98,10 @@ class APITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ok")
 
-    def test_lists_both_components_and_filters(self):
+    def test_lists_osint_investigations_and_filters(self):
         response = self.client.get("/api/v1/investigations")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["total"], 2)
+        self.assertEqual(response.json()["total"], 1)
         filtered = self.client.get("/api/v1/investigations", params={"component": "osint"})
         self.assertEqual(filtered.json()["items"][0]["component"], "osint")
 
@@ -125,7 +109,7 @@ class APITests(unittest.TestCase):
         response = self.client.get("/api/v1/investigations/osint/OSINT_1")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["summary"]["pages_visited"], 8)
-        missing = self.client.get("/api/v1/investigations/dynamic/missing")
+        missing = self.client.get("/api/v1/investigations/osint/missing")
         self.assertEqual(missing.status_code, 404)
 
     def test_creates_and_reads_osint_job(self):
@@ -142,10 +126,41 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/jobs/JOB_1").status_code, 200)
 
     def test_rejects_unconfirmed_authorization(self):
-        response = self.client.post("/api/v1/jobs/dynamic", json={
-            "target": "https://example.com", "max_pages": 5, "authorized": False,
+        response = self.client.post("/api/v1/jobs/osint", json={
+            "target": "example.com", "collectors": ["DNS"], "authorized": False,
         })
         self.assertEqual(response.status_code, 400)
+
+    def test_creates_one_virustotal_job_for_multiple_domains(self):
+        response = self.client.post("/api/v1/jobs/virustotal", json={
+            "domains": ["Example.com", "related.example", "example.com"],
+            "brand": "Example", "authorized": True,
+        })
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["component"], "virustotal")
+        self.assertEqual(self.jobs.jobs["JOB_1"]["payload"]["domains"], ["example.com", "related.example"])
+
+    def test_creates_external_combined_investigation_job(self):
+        response = self.client.post("/api/v1/jobs/external", json={
+            "job_id": "EXT-42",
+            "complaint_id": "CMP-7",
+            "target_id": "TGT-9",
+            "target": "fairwin247.co",
+            "authorized": True,
+        })
+        self.assertEqual(response.status_code, 202)
+        job = self.jobs.jobs["JOB_1"]
+        self.assertEqual(job["component"], "external")
+        self.assertEqual(job["payload"]["external_job_id"], "EXT-42")
+        self.assertEqual(job["payload"]["complaint_id"], "CMP-7")
+        # Response-model filtering must retain routing identifiers for the monitor.
+        listed = self.client.get("/api/v1/jobs").json()["items"][0]
+        detail = self.client.get("/api/v1/jobs/JOB_1").json()
+        for returned in (response.json(), listed, detail):
+            self.assertEqual(returned["payload"]["external_job_id"], "EXT-42")
+            self.assertEqual(returned["payload"]["complaint_id"], "CMP-7")
+            self.assertEqual(returned["payload"]["target_id"], "TGT-9")
+            self.assertEqual(returned["payload"]["target"], "fairwin247.co")
 
     def test_cancels_a_queued_job_immediately(self):
         self.client.post("/api/v1/jobs/osint", json={

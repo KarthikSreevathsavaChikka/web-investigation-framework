@@ -1,12 +1,13 @@
 streamlit>=1.49.0
 psycopg[binary]>=3.2.0
-playwright>=1.40.0
+# Keep this version aligned with the browser image in Dockerfile.
+playwright==1.62.0
 beautifulsoup4>=4.12.0
 rapidfuzz>=3.5.0
 opencv-python>=4.8.0
 plotly>=5.18.0
 pillow>=10.0.0
-requests>=2.31.0
+requests[socks]>=2.31.0
 pandas>=2.0.0
 PyYAML>=6.0.0
 tldextract>=5.0.0

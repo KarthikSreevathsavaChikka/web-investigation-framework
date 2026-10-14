@@ -8,6 +8,7 @@ from typing import Iterable
 
 from database.connection import connect_database, is_postgresql_connection
 from database.migrations import lock_schema_migration, record_schema_version, schema_version_exists
+from core.time_utils import now_ist
 from osint.models import (
     CollectorResult,
     DorkQuery,
@@ -17,11 +18,13 @@ from osint.models import (
     TargetResolution,
 )
 from osint.risk import RiskAssessment
+from osint.coverage import summarize_coverage
+from osint.url_tools import is_content_page_url, normalize_result_url
 from osint.resolver import TargetResolver
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return now_ist().isoformat(timespec="seconds")
 
 
 class OSINTRepository:
@@ -35,7 +38,7 @@ class OSINTRepository:
     def init_schema(self) -> None:
         with self.connection() as connection:
             lock_schema_migration(connection)
-            if is_postgresql_connection(connection) and schema_version_exists(connection, "osint", 2):
+            if is_postgresql_connection(connection) and schema_version_exists(connection, "osint", 3):
                 return
             connection.executescript(
                 """
@@ -339,12 +342,22 @@ class OSINTRepository:
                 ("domain_status", "TEXT DEFAULT 'Unknown'"), ("detailed_status", "TEXT DEFAULT 'Unknown'"),
                 ("http_status", "TEXT DEFAULT 'Unavailable'"), ("final_url", "TEXT"),
                 ("response_time_ms", "INTEGER"), ("check_error", "TEXT"), ("checked_at", "TEXT"),
-                ("monthly_visits", "INTEGER"), ("yearly_visits", "INTEGER"),
+                ("monthly_visits", "BIGINT"), ("yearly_visits", "BIGINT"),
                 ("yearly_visits_kind", "TEXT DEFAULT 'Unavailable'"), ("traffic_source", "TEXT DEFAULT 'Unavailable'"),
                 ("traffic_data_date", "TEXT"),
+                ("traffic_status", "TEXT DEFAULT 'not_checked'"), ("traffic_error", "TEXT DEFAULT ''"),
+                ("traffic_refreshed_at", "TEXT DEFAULT ''"),
             ):
                 self._ensure_column(connection, "osint_target_candidates", column, definition)
+            self._ensure_column(connection, "osint_domain_traffic_cache", "traffic_status", "TEXT DEFAULT 'not_checked'")
+            if is_postgresql_connection(connection):
+                for table in ("osint_target_candidates", "osint_domain_traffic_cache"):
+                    for column in ("monthly_visits", "yearly_visits"):
+                        row = connection.execute("SELECT data_type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?", (table, column)).fetchone()
+                        if row and row["data_type"] == "integer":
+                            connection.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT")
             record_schema_version(connection, "osint", 2)
+            record_schema_version(connection, "osint", 3)
 
     @staticmethod
     def _ensure_column(connection, table: str, column: str, definition: str) -> None:
@@ -406,6 +419,12 @@ class OSINTRepository:
                         )
                         for candidate in resolution.candidates
                     ],
+                )
+            else:
+                connection.execute(
+                    "INSERT OR IGNORE INTO osint_target_candidates "
+                    "(investigation_id, domain, confidence, reason, appearances, selected) VALUES (?, ?, 1.0, ?, 1, 1)",
+                    (investigation_id, target.domain, "Directly supplied investigation target"),
                 )
             connection.executemany(
                 """
@@ -694,12 +713,61 @@ class OSINTRepository:
     def list_investigations(self) -> list[dict]:
         with self.connection() as connection:
             rows = connection.execute("SELECT * FROM osint_investigations ORDER BY started_at DESC").fetchall()
-        return [dict(row) for row in rows]
+        items = [dict(row) for row in rows]
+        for item in items:
+            if item.get("completed_at") and item.get("status") == "PARTIAL":
+                item["status"] = "COMPLETED"
+        return items
+
+    def get_llm_reviews(self, investigation_id: str) -> list[dict]:
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT source_url, metadata_json, discovered_at FROM osint_observations WHERE investigation_id = ? AND entity_type = 'LLM_RELEVANCE_REVIEW' ORDER BY id",
+                (investigation_id,),
+            ).fetchall()
+        return [{**json.loads(row["metadata_json"]), "source_url": row["source_url"], "reviewed_at": row["discovered_at"]} for row in rows]
+
+    def get_collection_diagnostics(self, investigation_id: str) -> dict:
+        """Saved run context, without credentials or live probes during report reads."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT entity_type, source_url, metadata_json FROM osint_observations "
+                "WHERE investigation_id = ? AND entity_type IN "
+                "('COLLECTION_READINESS', 'TARGET_PROFILE', 'SOURCE_SELECTION', 'SOCIAL_COLLECTION_DIAGNOSTIC') ORDER BY id",
+                (investigation_id,),
+            ).fetchall()
+        result = {"readiness": {}, "target_profile": {}, "source_selection": {}, "social_collection": []}
+        fields = {"COLLECTION_READINESS": "readiness", "TARGET_PROFILE": "target_profile", "SOURCE_SELECTION": "source_selection"}
+        for row in rows:
+            metadata = json.loads(row["metadata_json"] or "{}")
+            if row["entity_type"] in fields:
+                result[fields[row["entity_type"]]] = metadata
+            else:
+                result["social_collection"].append({**metadata, "source_url": row["source_url"]})
+        return result
+
+    def prioritize_reviewed_sources(self, investigation_id: str, sources) -> list:
+        promoted = {item["source_url"] for item in self.get_llm_reviews(investigation_id)
+                    if item.get("stage") == "discovery" and item.get("review_status") == "reviewed"
+                    and item.get("relevance") == "relevant" and item.get("passage_ids")}
+        return sorted(sources, key=lambda item: (
+            0 if item["source_type"] == "target_homepage" else 1,
+            0 if item["source_url"] in promoted else 1,
+        ))
+
+    def get_collection_coverage(self, investigation_id: str) -> dict:
+        return summarize_coverage(self.get_collector_runs(investigation_id), self.get_page_captures(investigation_id))
 
     def get_investigation(self, investigation_id: str) -> dict:
         with self.connection() as connection:
             row = connection.execute("SELECT * FROM osint_investigations WHERE id = ?", (investigation_id,)).fetchone()
-        return dict(row) if row else {}
+        if not row:
+            return {}
+        result = dict(row)
+        if result.get("completed_at") and result.get("status") == "PARTIAL":
+            result["status"] = "COMPLETED"
+        result["coverage"] = self.get_collection_coverage(investigation_id)
+        return result
 
     def get_observations(self, investigation_id: str) -> list[dict]:
         with self.connection() as connection:
@@ -744,7 +812,8 @@ class OSINTRepository:
                 """
                 SELECT domain, confidence, reason, appearances, selected, domain_status, detailed_status,
                        http_status, final_url, response_time_ms, check_error, checked_at, monthly_visits,
-                       yearly_visits, yearly_visits_kind, traffic_source, traffic_data_date
+                       yearly_visits, yearly_visits_kind, traffic_source, traffic_data_date,
+                       traffic_status, traffic_error, traffic_refreshed_at
                 FROM osint_target_candidates WHERE investigation_id = ?
                 ORDER BY confidence DESC, appearances DESC
                 """,
@@ -762,23 +831,44 @@ class OSINTRepository:
             )
 
     def save_domain_checks(self, investigation_id: str, checks: Iterable[object]) -> None:
-        fields = ("domain_status", "detailed_status", "http_status", "final_url", "response_time_ms", "error", "checked_at", "monthly_visits", "yearly_visits", "yearly_visits_kind", "traffic_source", "traffic_data_date")
+        fields = ("domain_status", "detailed_status", "http_status", "final_url", "response_time_ms", "error", "checked_at", "monthly_visits", "yearly_visits", "yearly_visits_kind", "traffic_source", "traffic_data_date", "traffic_status", "traffic_error", "traffic_refreshed_at")
         with self.connection() as connection:
             for check in checks:
                 data = check.__dict__
                 connection.execute(
                     """UPDATE osint_target_candidates SET domain_status=?, detailed_status=?, http_status=?, final_url=?,
                        response_time_ms=?, check_error=?, checked_at=?, monthly_visits=?, yearly_visits=?,
-                       yearly_visits_kind=?, traffic_source=?, traffic_data_date=? WHERE investigation_id=? AND domain=?""",
+                       yearly_visits_kind=?, traffic_source=?, traffic_data_date=?, traffic_status=?, traffic_error=?, traffic_refreshed_at=? WHERE investigation_id=? AND domain=?""",
                     tuple(data.get(field) for field in fields) + (investigation_id, data["domain"]),
                 )
+                self._save_traffic_cache(connection, data)
+
+    @staticmethod
+    def _save_traffic_cache(connection, data):
+        # An outage must not destroy the last successful estimate shared across investigations.
+        previous = connection.execute("SELECT monthly_visits FROM osint_domain_traffic_cache WHERE domain = ?", (data["domain"],)).fetchone()
+        if data.get("monthly_visits") is None and previous and previous["monthly_visits"] is not None:
+            return
+        connection.execute(
+            """INSERT OR REPLACE INTO osint_domain_traffic_cache
+               (domain, monthly_visits, yearly_visits, yearly_visits_kind, traffic_source, traffic_data_date, error, refreshed_at, traffic_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (data["domain"], data.get("monthly_visits"), data.get("yearly_visits"), data.get("yearly_visits_kind"),
+             data.get("traffic_source") or "Unavailable", data.get("traffic_data_date"), data.get("traffic_error", ""),
+             data.get("traffic_refreshed_at") or utc_now(), data.get("traffic_status", "not_checked")),
+        )
+
+    def save_traffic_results(self, investigation_id: str, results: Iterable[dict]) -> None:
+        """Refresh traffic alone, preserving website availability and collection timestamps."""
+        from osint.domain_intelligence import TRAFFIC_FIELDS
+        with self.connection() as connection:
+            for data in results:
                 connection.execute(
-                    """INSERT OR REPLACE INTO osint_domain_traffic_cache
-                       (domain, monthly_visits, yearly_visits, yearly_visits_kind, traffic_source, traffic_data_date, error, refreshed_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (data["domain"], data.get("monthly_visits"), data.get("yearly_visits"), data.get("yearly_visits_kind"),
-                     data.get("traffic_source", "Unavailable"), data.get("traffic_data_date"), data.get("error"), data.get("checked_at")),
+                    "UPDATE osint_target_candidates SET " + ", ".join(f"{key} = ?" for key in TRAFFIC_FIELDS) +
+                    " WHERE investigation_id = ? AND domain = ?",
+                    tuple(data.get(key) for key in TRAFFIC_FIELDS) + (investigation_id, data["domain"]),
                 )
+                self._save_traffic_cache(connection, data)
 
     def get_traffic_cache(self, domains: Iterable[str]) -> dict[str, dict]:
         names = list(dict.fromkeys(domains))
@@ -823,10 +913,73 @@ class OSINTRepository:
                 """,
                 (investigation_id,),
             ).fetchall()
+            details = connection.execute(
+                "SELECT source_url, metadata_json FROM osint_observations "
+                "WHERE investigation_id = ? AND entity_type = 'AUTOMATED_SOCIAL_FINDING' ORDER BY id",
+                (investigation_id,),
+            ).fetchall()
+        metadata_by_post = {}
+        for item in details:
+            metadata = json.loads(item["metadata_json"] or "{}")
+            metadata_by_post[(item["source_url"], metadata.get("platform", "Unknown"))] = metadata
         findings = [dict(row) for row in rows]
+        # Public-page captures and authenticated captures share the same finding UI.
+        # Match the requested URL, never a redirect destination shared by other posts.
+        def url_key(url: str) -> str:
+            try:
+                return normalize_result_url(url)
+            except ValueError:
+                return url
+
+        evidence_by_url: dict[str, list[dict]] = {}
+        for evidence in self.get_evidence(investigation_id) if findings else []:
+            evidence_by_url.setdefault(url_key(evidence["source_url"]), []).append(evidence)
+        captures_by_url = {url_key(item["source_url"]): item
+                           for item in self.get_page_captures(investigation_id)} if findings else {}
         for finding in findings:
             finding["screenshot_paths"] = json.loads(finding.pop("screenshot_paths_json") or "[]")
+            metadata = metadata_by_post.get((finding["post_url"], finding["platform"]), {})
+            for field in ("content_scope", "capture_status", "capture_reason", "search_snippet", "author",
+                          "published_at", "detail_source_url", "screenshot_scope", "detail_sha256", "captured_at",
+                          "screenshot_provenance", "post_screenshot_path", "post_screenshot_sha256", "text_truncated",
+                          "text_completeness", "authentication", "detail_target_match"):
+                if field in metadata:
+                    finding[field] = metadata[field]
+            key = url_key(finding["post_url"])
+            for evidence in evidence_by_url.get(key, []):
+                path = evidence["screenshot_path"]
+                if path in finding["screenshot_paths"]:
+                    continue
+                finding["screenshot_paths"].append(path)
+                finding.setdefault("screenshot_provenance", []).append({
+                    "path": path, "scope": "public_page",
+                    "url": evidence.get("final_url") or evidence["source_url"],
+                    "sha256": evidence["sha256"], "text": evidence.get("context_text", ""),
+                })
+            if evidence_by_url.get(key):
+                finding.setdefault("content_scope", "search_snippet")
+                finding["page_capture_status"] = "captured"
+                if finding.get("capture_status") != "captured":
+                    finding["capture_status"] = "page_captured"
+                    finding["capture_reason"] = "Public source-page screenshot captured; finding text remains a search snippet."
+            elif key in captures_by_url and not finding["screenshot_paths"]:
+                capture = captures_by_url[key]
+                finding["page_capture_status"] = capture["accessibility_status"]
+                finding["capture_status"] = "unavailable"
+                finding["capture_reason"] = capture.get("failure_reason") or capture["accessibility_status"]
         return findings
+
+    def get_screenshot_summaries(self, investigation_id: str) -> list[dict]:
+        summaries = []
+        for item in self.get_observations(investigation_id):
+            if item.get("entity_type") != "LLM_SCREENSHOT_SUMMARY":
+                continue
+            try:
+                metadata = json.loads(item.get("metadata_json") or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            summaries.append({**metadata, "observation_id": item["id"]})
+        return summaries
 
     def get_sources(self, investigation_id: str) -> list[dict]:
         with self.connection() as connection:
@@ -835,7 +988,7 @@ class OSINTRepository:
                 SELECT s.id, s.source_url, s.normalized_url, s.title, s.snippet, s.source_type,
                        s.first_seen_at, COUNT(m.id) AS discovered_by_queries,
                        MIN(m.search_rank) AS best_rank,
-                       MAX(CASE WHEN q.document_type IS NOT NULL AND q.document_type != '' THEN 1 ELSE 0 END) AS document_priority
+                       MAX(CASE WHEN q.document_type IS NOT NULL AND q.document_type != '' AND m.search_engine != 'first_party_browser' THEN 1 ELSE 0 END) AS document_priority
                 FROM osint_sources s
                 LEFT JOIN osint_source_query_map m ON m.source_id = s.id
                 LEFT JOIN osint_queries q ON q.investigation_id = s.investigation_id AND q.query_id = m.query_id
@@ -845,7 +998,7 @@ class OSINTRepository:
                 """,
                 (investigation_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return self.prioritize_reviewed_sources(investigation_id, [dict(row) for row in rows])
 
     def get_document_sources(self, investigation_id: str, limit: int = 25) -> list[dict]:
         """Return accepted document leads across every query, with provenance."""
@@ -917,26 +1070,81 @@ class OSINTRepository:
                 items.append(item)
         return items
 
+    def ensure_first_party_source(
+        self, investigation_id: str, target: NormalizedTarget, queries: Iterable[DorkQuery]
+    ) -> None:
+        """Register the supplied site as a browser-capture task.
+
+        Search providers and lightweight HTTP probes can be blocked while a normal
+        browser can still render the public homepage.  The input site must therefore
+        be captured independently of its search-result ranking.
+        """
+        source_url = target.url
+        normalized_url = normalize_result_url(target.url)
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO osint_sources
+                (investigation_id, normalized_url, source_url, title, snippet, source_type, first_seen_at,
+                 relevance_status, matched_target_variant, relevance_field, relevance_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    investigation_id, normalized_url, source_url, "Input target homepage",
+                    "First-party browser capture of the supplied target URL.",
+                    "target_homepage", utc_now(), "accepted", target.domain, "input",
+                    "Directly supplied investigation target",
+                ),
+            )
+            source = connection.execute(
+                "SELECT id FROM osint_sources WHERE investigation_id = ? AND normalized_url = ?",
+                (investigation_id, normalized_url),
+            ).fetchone()
+            if not source:
+                return
+            connection.execute(
+                "UPDATE osint_sources SET source_type = 'target_homepage', source_url = ?, relevance_status = 'accepted' WHERE id = ?",
+                (source_url, source["id"]),
+            )
+            for query in queries:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO osint_source_query_map
+                    (source_id, query_id, query_text, search_engine, search_rank)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (source["id"], query.query_id, query.query, "first_party_browser", 0),
+                )
+
     def get_evidence_tasks(self, investigation_id: str, limit: int = 8) -> list[dict]:
         """Return deduplicated pages with every SERP query that discovered each page."""
         with self.connection() as connection:
             source_rows = connection.execute(
                 """
                 SELECT s.id AS source_id, s.source_url, s.normalized_url, s.source_type, s.title, s.snippet,
-                       MAX(CASE WHEN q.document_type IS NOT NULL AND q.document_type != '' THEN 1 ELSE 0 END) AS document_priority,
+                       MAX(CASE WHEN q.document_type IS NOT NULL AND q.document_type != '' AND m.search_engine != 'first_party_browser' THEN 1 ELSE 0 END) AS document_priority,
                        MIN(m.search_rank) AS best_rank
                 FROM osint_sources s
                 LEFT JOIN osint_source_query_map m ON m.source_id = s.id
                 LEFT JOIN osint_queries q ON q.investigation_id = s.investigation_id AND q.query_id = m.query_id
                 WHERE s.investigation_id = ? AND s.relevance_status = 'accepted'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM osint_documents d
+                    WHERE d.investigation_id = s.investigation_id
+                      AND (d.source_url = s.source_url OR d.final_url = s.source_url)
+                  )
                 GROUP BY s.id
-                ORDER BY document_priority DESC, best_rank, s.id
-                LIMIT ?
+                ORDER BY CASE WHEN s.source_type = 'target_homepage' THEN 0 ELSE 1 END,
+                         document_priority DESC, best_rank, s.id
                 """,
-                (investigation_id, max(0, limit)),
+                (investigation_id,),
             ).fetchall()
             tasks = []
-            for source in source_rows:
+            for source in self.prioritize_reviewed_sources(investigation_id, source_rows):
+                if len(tasks) >= max(0, limit):
+                    break
+                if not is_content_page_url(source["source_url"]):
+                    continue
                 mappings = connection.execute(
                     """
                     SELECT m.query_id, q.name AS query_name, q.category AS query_category,
@@ -966,6 +1174,7 @@ class OSINTRepository:
                 if query_items:
                     task = dict(source)
                     task["queries"] = query_items
+                    task["first_party_seed"] = task.get("source_type") == "target_homepage"
                     tasks.append(task)
         return tasks
 
@@ -983,6 +1192,11 @@ class OSINTRepository:
                   ON q.investigation_id = s.investigation_id AND q.query_id = m.query_id
                 WHERE s.investigation_id = ?
                   AND s.relevance_status = 'accepted'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM osint_documents d
+                    WHERE d.investigation_id = s.investigation_id
+                      AND (d.source_url = s.source_url OR d.final_url = s.source_url)
+                  )
                   AND q.document_type IS NOT NULL AND q.document_type != ''
                   AND (
                     s.source_type IN ('pdf_document', 'other_document')
@@ -1222,7 +1436,7 @@ class OSINTRepository:
                        COALESCE(MAX(x.accepted_results), 0) AS accepted_results,
                        COALESCE(MAX(x.rejected_irrelevant), 0) AS rejected_results,
                        COUNT(DISTINCT s.id) AS unique_urls,
-                       COUNT(DISTINCT p.id) AS pages_visited,
+                       COUNT(DISTINCT CASE WHEN p.accessibility_status != 'skipped_non_content' THEN p.id END) AS pages_visited,
                        COUNT(DISTINCT e.id) AS evidence_matches,
                        COUNT(DISTINCT shot.id) AS screenshots,
                        (COUNT(DISTINCT CASE WHEN p.accessibility_status = 'manual_required' THEN p.id END) +
@@ -1253,7 +1467,7 @@ class OSINTRepository:
                   (SELECT COUNT(*) FROM osint_search_results WHERE investigation_id = ?) AS raw_search_results,
                   (SELECT COUNT(*) FROM osint_sources WHERE investigation_id = ? AND relevance_status = 'accepted') AS accepted_sources,
                   (SELECT COUNT(*) FROM osint_search_results WHERE investigation_id = ? AND relevance_status = 'rejected_irrelevant') AS rejected_irrelevant,
-                  (SELECT COUNT(*) FROM osint_page_captures WHERE investigation_id = ?) AS pages_visited,
+                  (SELECT COUNT(*) FROM osint_page_captures WHERE investigation_id = ? AND accessibility_status != 'skipped_non_content') AS pages_visited,
                   (SELECT COUNT(*) FROM osint_evidence_matches e JOIN osint_page_captures p ON p.id = e.page_capture_id WHERE p.investigation_id = ?) AS confirmed_evidence,
                   (SELECT COUNT(*) FROM osint_documents WHERE investigation_id = ? AND relevance_status = 'confirmed_evidence') AS public_documents,
                   (SELECT COUNT(*) FROM osint_evidence_screenshots s JOIN osint_evidence_matches e ON e.id = s.evidence_match_id JOIN osint_page_captures p ON p.id = e.page_capture_id WHERE p.investigation_id = ?) AS screenshots_captured,

@@ -4,6 +4,19 @@ import re
 from urllib.parse import urlsplit
 
 
+def social_screenshot_context(finding: dict, screenshot_path: str) -> dict:
+    """Keep the text paired with the page that was actually photographed."""
+    provenance = next((item for item in finding.get("screenshot_provenance", [])
+                       if item.get("path") == screenshot_path), {})
+    scope = provenance.get("scope", "search_results")
+    text = (finding.get("search_snippet") if scope == "search_results" else finding.get("post_text"))
+    if scope == "public_page":
+        text = provenance.get("text") or "Public source-page screenshot; finding text was collected separately from search results."
+    return {"scope": scope, "text": text or finding.get("post_text") or finding.get("title") or "",
+            "url": provenance.get("url") or finding.get("post_url", ""),
+            "sha256": provenance.get("sha256", "")}
+
+
 def evidence_scope(source_url: str, final_url: str, target_domain: str) -> str:
     """Describe a source relationship without confusing a query with its result."""
     target = target_domain.casefold().strip(".").removeprefix("www.")
@@ -25,6 +38,10 @@ def clean_evidence_text(value: str | None, limit: int = 8_000) -> str:
     """Normalize captured prose, remove repeated blocks/sentences, and avoid hard truncation."""
     if not value:
         return ""
+
+    # Extracted PDFs can contain XML-forbidden control characters. Word stores
+    # text as XML, so normalize these before report generation.
+    value = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]", " ", value)
 
     normalized = re.sub(r"[ \t]+", " ", value.replace("\r", "\n"))
     blocks = [re.sub(r"\s+", " ", item).strip() for item in re.split(r"\n{2,}", normalized)]

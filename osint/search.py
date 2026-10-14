@@ -75,7 +75,7 @@ class AggregatingSearchProvider(SearchProvider):
         self.providers = [provider for provider in providers if provider.available]
         self.name = name or type(self).name
         self._executions: dict[str, tuple[SearchProviderExecution, ...]] = {}
-        self._failed_providers: set[str] = set()
+        self._failed_providers: dict[str, float] = {}
 
     @property
     def available(self) -> bool:
@@ -86,18 +86,18 @@ class AggregatingSearchProvider(SearchProvider):
         seen: set[str] = set()
         executions: list[SearchProviderExecution] = []
         for provider in self.providers:
-            if provider.name in self._failed_providers:
+            if time.monotonic() < self._failed_providers.get(provider.name, 0):
                 executions.append(SearchProviderExecution(
                     query_id=query_id,
                     provider=provider.name,
                     status="failed",
-                    error="Skipped after an earlier provider failure in this search batch",
+                    error="Skipped after an earlier provider failure; cooling down for 30 seconds",
                 ))
                 continue
             try:
                 results = provider.search(query, query_id=query_id, count=count)
             except Exception as exc:
-                self._failed_providers.add(provider.name)
+                self._failed_providers[provider.name] = time.monotonic() + 30
                 executions.append(SearchProviderExecution(
                     query_id=query_id,
                     provider=provider.name,
@@ -110,6 +110,7 @@ class AggregatingSearchProvider(SearchProvider):
                 provider=provider.name,
                 status="completed",
                 results=tuple(results),
+                error=getattr(provider, "last_error", None),
             ))
             for result in results:
                 try:
@@ -136,11 +137,135 @@ class AggregatingSearchProvider(SearchProvider):
 def build_keyless_search_provider() -> AggregatingSearchProvider:
     """Create the standard keyless provider group used across resolution and discovery."""
 
-    timeout = max(1, min(int(os.getenv("OSINT_KEYLESS_SEARCH_TIMEOUT", "3")), 15))
+    timeout = max(1, min(int(os.getenv("OSINT_KEYLESS_SEARCH_TIMEOUT", "5")), 15))
+    # SearXNG waits up to four seconds for its upstream engines. Give its JSON
+    # response a small transport/serialization margin without slowing the direct
+    # Bing RSS and DuckDuckGo providers.
+    searxng_timeout = max(
+        4,
+        min(int(os.getenv("OSINT_SEARXNG_SEARCH_TIMEOUT", "10")), 15),
+    )
     return AggregatingSearchProvider(
-        [BingRSSSearchProvider(timeout=timeout), DuckDuckGoSearchProvider(timeout=timeout)],
+        [
+            BingRSSSearchProvider(timeout=timeout),
+            DuckDuckGoSearchProvider(timeout=timeout),
+            SearXNGSearchProvider(timeout=searxng_timeout),
+        ],
         name="keyless_aggregated",
     )
+
+
+class SearXNGSearchProvider(SearchProvider):
+    """Search a self-hosted SearXNG instance through its JSON API."""
+
+    name = "searxng"
+    last_error = None
+    capabilities = SearchProviderCapabilities("partial", "partial", "partial", "partial", "partial")
+
+    def __init__(self, base_url: str | None = None, timeout: int = 10):
+        self.base_url = (base_url or os.getenv("SEARXNG_URL", "")).rstrip("/")
+        self.timeout = timeout
+        self.cache_ttl = max(0, int(os.getenv("OSINT_SEARCH_CACHE_TTL", "86400")))
+        BraveSearchProvider._init_cache()
+
+    @property
+    def available(self) -> bool:
+        return bool(self.base_url) and os.getenv("OSINT_DISABLE_SEARXNG", "false").lower() not in {
+            "1", "true", "yes",
+        }
+
+    def search(self, query: str, *, query_id: str, count: int) -> list[SearchResult]:
+        self.last_error = None
+        if not self.available:
+            return []
+        cached = self._get_cached(query, query_id, count)
+        if cached is not None:
+            return cached
+        response = requests.get(
+            f"{self.base_url}/search",
+            params={
+                "q": query,
+                "format": "json",
+                "language": os.getenv("OSINT_SEARCH_LANGUAGE", "en"),
+                "safesearch": "1",
+            },
+            headers={"Accept": "application/json", "User-Agent": "Web-Investigator/1.0"},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("SearXNG returned a non-JSON response; enable JSON in search.formats") from exc
+
+        results: list[SearchResult] = []
+        seen: set[str] = set()
+        limit = min(max(count, 1), 20)
+        for item in payload.get("results", []):
+            destination = str(item.get("url") or "").strip()
+            if not destination.startswith(("http://", "https://")):
+                continue
+            try:
+                normalized = normalize_result_url(destination)
+            except ValueError:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            results.append(SearchResult(
+                query_id=query_id,
+                query_text=query,
+                search_engine=self.name,
+                rank=len(results) + 1,
+                title=str(item.get("title") or destination),
+                url=destination,
+                snippet=str(item.get("content") or ""),
+            ))
+            if len(results) >= limit:
+                break
+        unavailable = payload.get("unresponsive_engines") or []
+        if unavailable:
+            self.last_error = "SearXNG upstream failures: " + "; ".join(
+                ": ".join(str(part) for part in item) if isinstance(item, (list, tuple)) else str(item)
+                for item in unavailable
+            )
+            if not results:
+                raise RuntimeError(self.last_error)
+        if results and not self.last_error:
+            self._set_cached(query, count, results)
+        return results
+
+    def _cache_key(self, query: str, count: int) -> str:
+        return hashlib.sha256(f"{self.name}\0{count}\0{query}".encode("utf-8")).hexdigest()
+
+    def _get_cached(self, query: str, query_id: str, count: int) -> list[SearchResult] | None:
+        if not self.cache_ttl:
+            return None
+        with connect_database() as connection:
+            row = connection.execute(
+                "SELECT payload_json, created_at FROM osint_search_cache WHERE cache_key = ?",
+                (self._cache_key(query, count),),
+            ).fetchone()
+        if not row or time.time() - row[1] > self.cache_ttl:
+            return None
+        return [SearchResult(query_id=query_id, query_text=query, **item) for item in json.loads(row[0])]
+
+    def _set_cached(self, query: str, count: int, results: list[SearchResult]) -> None:
+        if not self.cache_ttl:
+            return
+        payload = [{
+            "search_engine": item.search_engine,
+            "rank": item.rank,
+            "title": item.title,
+            "url": item.url,
+            "snippet": item.snippet,
+        } for item in results]
+        with connect_database() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO osint_search_cache "
+                "(cache_key, provider, payload_json, created_at) VALUES (?, ?, ?, ?)",
+                (self._cache_key(query, count), self.name, json.dumps(payload), time.time()),
+            )
 
 
 class BraveSearchProvider(SearchProvider):
@@ -400,6 +525,8 @@ class DuckDuckGoSearchProvider(SearchProvider):
         )
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
+        if soup.select_one('form[action*="anomaly"], .anomaly-modal, #challenge-form'):
+            raise RuntimeError("DuckDuckGo returned a challenge page; manual review required")
         results = []
         for result in soup.select(".result"):
             link = result.select_one("a.result__a")
@@ -422,6 +549,8 @@ class DuckDuckGoSearchProvider(SearchProvider):
             )
             if len(results) >= min(max(count, 1), 20):
                 break
+        if not results and "no results" not in soup.get_text(" ", strip=True).casefold():
+            raise RuntimeError("DuckDuckGo returned unrecognized search HTML; no results could be verified")
         self._set_cached(query, count, results)
         return results
 
@@ -444,10 +573,10 @@ class DuckDuckGoSearchProvider(SearchProvider):
             ).fetchone()
         if not row or time.time() - row[1] > self.cache_ttl:
             return None
-        return [SearchResult(query_id=query_id, query_text=query, **item) for item in json.loads(row[0])]
+        return [SearchResult(query_id=query_id, query_text=query, **item) for item in json.loads(row[0])] or None
 
     def _set_cached(self, query: str, count: int, results: list[SearchResult]) -> None:
-        if not self.cache_ttl:
+        if not self.cache_ttl or not results:
             return
         payload = [
             {

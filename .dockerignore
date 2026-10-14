@@ -6,6 +6,7 @@ __pycache__
 .pytest_cache
 .env
 data/*.db
+data/browser_sessions/
 screenshots/*
 evidence/*
 reports/*

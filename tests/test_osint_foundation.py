@@ -6,11 +6,14 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from PIL import Image
+
 from osint.dorks import DorkGenerator
 from osint.evidence_capture import (
     SERPEvidenceCapturePipeline,
     classify_page_access,
     group_evidence_positions,
+    first_party_redirect_matches_source,
     sanitize_path_component,
 )
 from osint.models import CollectorResult, DorkQuery, EvidenceScreenshotRecord, Observation, PageCaptureRecord, SearchResult
@@ -19,13 +22,13 @@ from osint.risk import RiskScorer
 from osint.storage import OSINTRepository
 from docx import Document
 
-from osint.documents import assess_docx, assess_pdf
+from osint.documents import _highlight_pdf_terms, assess_docx, assess_pdf
 from core.playwright_session import close_browser_session, launch_browser_session
-from osint.search import AggregatingSearchProvider, BingRSSSearchProvider, DuckDuckGoSearchProvider, GoogleSearchProvider, SearchProvider
+from osint.search import AggregatingSearchProvider, BingRSSSearchProvider, DuckDuckGoSearchProvider, GoogleSearchProvider, SearXNGSearchProvider, SearchProvider
 from osint.collectors.brave_search import KeylessSearchCollector
 from osint.collectors.base import CollectorContext
 from osint.collectors.free_discovery import CertificateTransparencyCollector, WaybackCDXCollector
-from osint.collectors.x_authenticated import post_matches_target, target_variants
+from osint.collectors.x_authenticated import post_matches_target, social_search_query, target_variants
 from osint.collectors.trustpilot import trustpilot_profile_matches, trustpilot_target_variants
 from osint.collectors.authenticated_social import (
     AUTHENTICATED_SOCIAL_COLLECTORS,
@@ -35,14 +38,27 @@ from osint.collectors.authenticated_social import (
 from osint.cancellation import InvestigationCancelled
 from osint.docx_report import OSINTDocxReportBuilder
 from osint.text_cleanup import clean_evidence_text, evidence_scope
-from ui.osint_workspace import BRAND_SCOPED_COLLECTORS, collectors_for_domain
+from ui.osint_workspace import (
+    BRAND_SCOPED_COLLECTORS,
+    DISCOVERY_DEPTHS,
+    collectors_for_domain,
+    discovery_depth_label,
+)
 
 
 class DomainNormalizerTests(unittest.TestCase):
     def test_normalizes_url_to_ascii_domain(self):
         target = DomainNormalizer.normalize("https://WWW.Example.com/path?q=1")
         self.assertEqual(target.domain, "www.example.com")
-        self.assertEqual(target.url, "https://www.example.com")
+        self.assertEqual(target.url, "https://www.example.com/path?q=1")
+
+    def test_discovery_depth_labels_explain_query_budgets(self):
+        self.assertEqual(DISCOVERY_DEPTHS["Fast"]["query_budget"], 12)
+        self.assertEqual(DISCOVERY_DEPTHS["Balanced"]["query_budget"], 25)
+        self.assertEqual(DISCOVERY_DEPTHS["Deep"]["query_budget"], 100)
+        self.assertIn("12 priority queries", discovery_depth_label("Fast"))
+        self.assertIn("25 queries", discovery_depth_label("Balanced"))
+        self.assertIn("all enabled queries", discovery_depth_label("Deep"))
 
     def test_rejects_ip_address(self):
         with self.assertRaises(TargetNormalizationError):
@@ -58,6 +74,11 @@ class XAuthenticatedCollectorTests(unittest.TestCase):
         self.assertIn("parimatch", target_variants(target))
         self.assertEqual(post_matches_target("Complaint about @Parimatch support", target), "parimatch")
         self.assertEqual(post_matches_target("Unrelated gaming discussion", target), "")
+        generic = DomainNormalizer.normalize("neta1.vip")
+        self.assertEqual(post_matches_target("Minha neta1 e a bibi que amamos", generic), "")
+        self.assertEqual(post_matches_target("Neta1 withdrawal pending; support is not responding", generic), "neta1")
+        self.assertEqual(post_matches_target("Neta1 " + "x" * 500 + " withdrawal", generic), "")
+        self.assertEqual(post_matches_target("Official site neta1.vip", generic), "neta1.vip")
 
     def test_brand_inside_tracking_url_is_not_a_social_finding(self):
         normalized = DomainNormalizer.normalize("1xbet.com")
@@ -364,11 +385,43 @@ class RepositoryTests(unittest.TestCase):
 
 
 class EvidenceCaptureTests(unittest.TestCase):
+    def test_highlights_multiword_target_on_rendered_pdf_page(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            image_path = Path(temp_dir) / "page.png"
+            Image.new("RGB", (200, 100), "white").save(image_path)
+            before = image_path.read_bytes()
+
+            count = _highlight_pdf_terms(
+                image_path,
+                {
+                    "width": 200,
+                    "height": 100,
+                    "words": [
+                        ("Reddy", (20, 20, 60, 40)),
+                        ("Book", (65, 20, 100, 40)),
+                    ],
+                },
+                ("Reddybook",),
+            )
+
+            self.assertEqual(count, 1)
+            self.assertNotEqual(image_path.read_bytes(), before)
+
     def test_every_query_includes_gambling_evidence_vocabulary(self):
         queries = DorkGenerator().generate(DomainNormalizer.normalize("example.com"))
         for query in queries:
             keywords = {item.casefold() for item in query.evidence_keywords}
             self.assertTrue({"betting", "gambling", "casino", "sportsbook", "wagering"}.issubset(keywords))
+
+    def test_category_context_adds_scoring_keywords_without_noise_domains(self):
+        queries = {item.query_id: item for item in DorkGenerator().generate(DomainNormalizer.normalize("example.com"))}
+        payment_keywords = {item.casefold() for item in queries["Q002"].evidence_keywords}
+        gambling_keywords = {item.casefold() for item in queries["Q009"].evidence_keywords}
+        self.assertIn("phonepe", payment_keywords)
+        self.assertIn("transaction successful", payment_keywords)
+        self.assertIn("parimatch", gambling_keywords)
+        self.assertIn("teen patti", gambling_keywords)
+        self.assertNotIn("telegram.me", payment_keywords)
 
     def test_groups_nearby_matches_and_sanitizes_paths(self):
         groups = group_evidence_positions([{"documentY": 20}, {"documentY": 200}, {"documentY": 900}])
@@ -379,6 +432,19 @@ class EvidenceCaptureTests(unittest.TestCase):
         self.assertEqual(classify_page_access(403, "")[0], "manual_required")
         self.assertEqual(classify_page_access(200, "Please verify you are human")[0], "manual_required")
         self.assertEqual(classify_page_access(404, "")[0], "failed")
+
+    def test_first_party_same_label_redirect_is_allowed(self):
+        self.assertTrue(first_party_redirect_matches_source("https://xmax.ac", "https://www.xmax.so/"))
+        self.assertFalse(first_party_redirect_matches_source("https://xmax.ac", "https://unrelated.example/"))
+
+    def test_short_brand_social_search_uses_exact_domain(self):
+        self.assertEqual(social_search_query(DomainNormalizer.normalize("xmax.ac")), "xmax.ac")
+        self.assertEqual(social_search_query(DomainNormalizer.normalize("parimatch.com")), "parimatch.com")
+
+    def test_short_brand_social_post_needs_high_signal_context(self):
+        target = DomainNormalizer.normalize("xmax.ac")
+        self.assertEqual(post_matches_target("Xmax sport app is now available", target), "")
+        self.assertEqual(post_matches_target("Xmax casino withdrawal support is available", target), "xmax")
 
     @patch("osint.documents.extract_pdf_pages")
     def test_pdf_requires_target_and_classifies_relevant_pages(self, extract_pages):
@@ -402,13 +468,12 @@ class EvidenceCaptureTests(unittest.TestCase):
         self.assertFalse(result.accepted)
 
     @patch("osint.documents.extract_pdf_pages")
-    def test_pdf_with_target_only_is_kept_as_a_document(self, extract_pages):
+    def test_pdf_rejects_target_only_document_without_context(self, extract_pages):
         extract_pages.return_value = ["Independent research paper referencing Parimatch in a market overview."]
         target = DomainNormalizer.normalize("parimatch.com")
         result = assess_pdf(b"pdf", target, ["withdrawal"])
-        self.assertTrue(result.accepted)
-        self.assertEqual(result.matched_keywords, ())
-        self.assertEqual(result.relevant_pages, (1,))
+        self.assertFalse(result.accepted)
+        self.assertIn("no configured evidence term", result.reason)
 
     def test_docx_requires_target_and_extracts_evidence(self):
         buffer = BytesIO()
@@ -452,6 +517,30 @@ class EvidenceCaptureTests(unittest.TestCase):
 
 
 class KeylessSearchProviderTests(unittest.TestCase):
+    @patch("osint.search.requests.get")
+    def test_parses_searxng_json_results(self, get):
+        response = Mock()
+        response.json.return_value = {
+            "results": [
+                {
+                    "title": "Example complaint",
+                    "url": "https://reviews.example/complaint",
+                    "content": "Example withdrawal complaint",
+                }
+            ]
+        }
+        response.raise_for_status.return_value = None
+        get.return_value = response
+        provider = SearXNGSearchProvider("http://searxng:8080")
+        provider.cache_ttl = 0
+
+        results = provider.search("example complaint", query_id="Q029", count=10)
+
+        self.assertEqual(results[0].search_engine, "searxng")
+        self.assertEqual(results[0].url, "https://reviews.example/complaint")
+        get.assert_called_once()
+        self.assertEqual(get.call_args.kwargs["params"]["format"], "json")
+
     def test_search_collection_stops_at_cancellation_checkpoint(self):
         query = DorkQuery("B001", "documents", "PDFs", "critical", 'filetype:pdf "Example"', "PDFs")
         context = CollectorContext(
@@ -690,6 +779,34 @@ class FreeDiscoveryTests(unittest.TestCase):
                 "Social and review captures",
                 "\n".join(paragraph.text for paragraph in report.paragraphs),
             )
+
+    def test_docx_does_not_repeat_captured_social_text_in_two_sections(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repository = OSINTRepository(Path(temp_dir) / "osint.db")
+            target = DomainNormalizer.normalize("example.com")
+            repository.create_investigation("OSINT_SOCIAL_DEDUP", target)
+            screenshot = Path(temp_dir) / "post.png"
+            screenshot.write_bytes(base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ))
+            second_screenshot = Path(temp_dir) / "post-detail.png"
+            second_screenshot.write_bytes(screenshot.read_bytes())
+            unique_text = "Unique captured social post text"
+            repository.save_collector_result("OSINT_SOCIAL_DEDUP", CollectorResult(
+                "x_authenticated_playwright", "COMPLETED", [Observation(
+                    "x_authenticated_playwright", "Social", "AUTOMATED_SOCIAL_FINDING",
+                    unique_text, "https://x.com/example/status/1", metadata={
+                        "platform": "X/Twitter", "post_text": unique_text,
+                        "normalized_url": "https://x.com/example/status/1",
+                        "query_id": "X-DIRECT", "rank": 1,
+                        "screenshot_paths": [str(screenshot), str(second_screenshot)], "capture_status": "captured",
+                    },
+                )],
+            ))
+            report = Document(BytesIO(OSINTDocxReportBuilder(repository).build("OSINT_SOCIAL_DEDUP")))
+            report_text = "\n".join(paragraph.text for paragraph in report.paragraphs)
+            self.assertEqual(report_text.count(unique_text), 1)
+            self.assertNotIn("Collected social text", report_text)
 
     def test_report_does_not_call_external_brand_evidence_exact_domain(self):
         self.assertEqual(

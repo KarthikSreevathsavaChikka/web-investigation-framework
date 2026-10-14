@@ -5,10 +5,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
+from core.time_utils import now_ist
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return now_ist()
 
 
 class InvestigationStatus(str, Enum):

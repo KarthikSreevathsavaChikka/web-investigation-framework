@@ -47,6 +47,21 @@ class StaticSearchProvider(SearchProvider):
                 for rank, (title, url, snippet) in enumerate(self.results, 1)]
 
 
+class RelatedDomainSearchProvider(StaticSearchProvider):
+    def __init__(self):
+        super().__init__("related", [
+            ("Fairwin 777 betting", "https://fairwin777.com", "Fairwin casino login"),
+            ("Fairwin 77", "https://fairwin77.com", "Online betting and games"),
+            ("Casino Fairwin", "https://casinofairwin.com", "Casino and sportsbook"),
+            ("Fairwin", "https://fairwin.gg", "Official betting site"),
+            ("Fairwin Asia", "https://fairwin.asia", "Register and play online"),
+            ("Fairwin Bets", "https://fairwinbets.com", "Sportsbook bonus"),
+            ("Fairwin tactical belt", "https://i-fairwin.com", "Men's belt store"),
+            ("Fairwin products", "https://amazon.com/fairwin", "Shop online"),
+            ("Fairwin Launchpad", "https://fairwinlaunchpad.com", "Startup publisher"),
+        ])
+
+
 class TargetResolverTests(unittest.TestCase):
     def test_classifies_supported_inputs(self):
         resolver = TargetResolver()
@@ -59,6 +74,33 @@ class TargetResolverTests(unittest.TestCase):
         resolution = TargetResolver().resolve("https://www.example.com/path")
         self.assertEqual(resolution.candidates[0].domain, "example.com")
         self.assertEqual(resolution.candidates[0].confidence, 1.0)
+
+    def test_direct_domain_is_primary_and_discovers_related_domains(self):
+        resolution = TargetResolver().resolve("fairwin247.co", RelatedDomainSearchProvider())
+
+        self.assertEqual(resolution.candidates[0].domain, "fairwin247.co")
+        self.assertEqual(resolution.candidates[0].confidence, 1.0)
+        self.assertEqual(
+            {item.domain for item in resolution.candidates[1:]},
+            {"fairwin777.com", "fairwin77.com", "casinofairwin.com", "fairwin.gg", "fairwin.asia", "fairwinbets.com"},
+        )
+
+    def test_related_domain_discovery_rejects_shared_name_third_parties(self):
+        resolution = TargetResolver().resolve("fairwin247.co", RelatedDomainSearchProvider())
+        domains = {item.domain for item in resolution.candidates}
+
+        self.assertNotIn("i-fairwin.com", domains)
+        self.assertNotIn("amazon.com", domains)
+        self.assertNotIn("fairwinlaunchpad.com", domains)
+
+    def test_brand_resolution_uses_the_same_conservative_related_domain_filter(self):
+        resolution = TargetResolver().resolve("Fairwin", RelatedDomainSearchProvider())
+        domains = {item.domain for item in resolution.candidates}
+
+        self.assertEqual(
+            domains,
+            {"fairwin777.com", "fairwin77.com", "casinofairwin.com", "fairwin.gg", "fairwin.asia", "fairwinbets.com"},
+        )
 
     def test_derives_parent_brand_from_mirror_style_domain(self):
         resolution = TargetResolver().resolve("parimatchs123.com")
@@ -177,6 +219,22 @@ class URLAndSourceTests(unittest.TestCase):
         accepted = SearchResult("Q001", "deposit", "bing_rss", 1, "Parimatchs123 withdrawal complaint", "https://reviews.example/report", "Parimatchs123 withdrawal pending")
         self.assertFalse(assess_serp_result(unrelated, target).accepted)
         self.assertTrue(assess_serp_result(accepted, target).accepted)
+
+    def test_accepts_reviewed_reddybook_alias_without_accepting_generic_reddy(self):
+        target = NormalizedTarget("reddybook.club", "reddybook.club", "https://reddybook.club", "Reddybook")
+        alias = SearchResult(
+            "B002", "reviews", "searxng", 1,
+            "Reddy Anna Book reviews", "https://www.trustpilot.com/review/thereddyannabookk.in",
+            "Customer reviews for Reddy Anna Book",
+        )
+        unrelated = SearchResult(
+            "B002", "reviews", "searxng", 2,
+            "Reddy restaurant reviews", "https://reviews.example/reddy-restaurant",
+            "Reviews for a restaurant owned by Mr Reddy",
+        )
+
+        self.assertTrue(assess_serp_result(alias, target).accepted)
+        self.assertFalse(assess_serp_result(unrelated, target).accepted)
 
     def test_requires_target_and_keyword_proximity(self):
         variants = build_target_variants(NormalizedTarget("example.com", "example.com", "https://example.com", "Example"))

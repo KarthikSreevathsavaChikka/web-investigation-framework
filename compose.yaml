@@ -1,4 +1,84 @@
+x-collection-environment: &collection-environment
+  TZ: Asia/Kolkata
+  OSINT_LLM_REVIEW_ENABLED: ${OSINT_LLM_REVIEW_ENABLED:-true}
+  LM_STUDIO_BASE_URL: ${LM_STUDIO_BASE_URL:-http://10.244.1.54:1234}
+  LM_STUDIO_MODEL: ${LM_STUDIO_MODEL:-google/gemma-4-e4b}
+  LM_STUDIO_API_KEY: ${LM_STUDIO_API_KEY:-}
+  OSINT_LLM_REVIEW_BUDGET: ${OSINT_LLM_REVIEW_BUDGET:-12}
+  OSINT_LLM_TIMEOUT: ${OSINT_LLM_TIMEOUT:-15}
+  OSINT_LLM_STAGE_SECONDS: ${OSINT_LLM_STAGE_SECONDS:-60}
+  OSINT_LLM_IMAGE_REVIEW_ENABLED: ${OSINT_LLM_IMAGE_REVIEW_ENABLED:-true}
+  # Zero means review every stored screenshot; the stage timeout remains the safety boundary.
+  OSINT_LLM_IMAGE_REVIEW_BUDGET: ${OSINT_LLM_IMAGE_REVIEW_BUDGET:-0}
+  OSINT_LLM_IMAGE_TIMEOUT: ${OSINT_LLM_IMAGE_TIMEOUT:-30}
+  OSINT_LLM_IMAGE_STAGE_SECONDS: ${OSINT_LLM_IMAGE_STAGE_SECONDS:-3600}
+  BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+  GOOGLE_SEARCH_API_KEY: ${GOOGLE_SEARCH_API_KEY:-}
+  GOOGLE_SEARCH_CSE_ID: ${GOOGLE_SEARCH_CSE_ID:-}
+  TRAFFIC_PROVIDER: ${TRAFFIC_PROVIDER:-similarweb}
+  SIMILARWEB_API_KEY: ${SIMILARWEB_API_KEY:-}
+  OSINT_DISABLE_SEARXNG: ${OSINT_DISABLE_SEARXNG:-false}
+  OSINT_DISABLE_KEYLESS_SEARCH: ${OSINT_DISABLE_KEYLESS_SEARCH:-false}
+  OSINT_KEYLESS_SEARCH_TIMEOUT: ${OSINT_KEYLESS_SEARCH_TIMEOUT:-5}
+  OSINT_SEARXNG_SEARCH_TIMEOUT: ${OSINT_SEARXNG_SEARCH_TIMEOUT:-10}
+  OSINT_SEARCH_CACHE_TTL: ${OSINT_SEARCH_CACHE_TTL:-86400}
+  OSINT_SEARCH_REQUEST_DELAY: ${OSINT_SEARCH_REQUEST_DELAY:-0.25}
+  OSINT_SEARCH_LANGUAGE: ${OSINT_SEARCH_LANGUAGE:-en}
+  OSINT_REQUEST_TIMEOUT: ${OSINT_REQUEST_TIMEOUT:-10}
+  OSINT_RESULTS_PER_QUERY: ${OSINT_RESULTS_PER_QUERY:-10}
+  OSINT_QUERY_BUDGET: ${OSINT_QUERY_BUDGET:-12}
+  OSINT_SOURCE_CRAWL_BUDGET: ${OSINT_SOURCE_CRAWL_BUDGET:-8}
+  OSINT_EVIDENCE_SOURCE_BUDGET: ${OSINT_EVIDENCE_SOURCE_BUDGET:-8}
+  OSINT_DOCUMENT_DOWNLOAD_BUDGET: ${OSINT_DOCUMENT_DOWNLOAD_BUDGET:-100}
+  OSINT_MAX_ARTIFACT_BYTES: ${OSINT_MAX_ARTIFACT_BYTES:-5000000}
+  OSINT_SOURCE_REQUEST_DELAY: ${OSINT_SOURCE_REQUEST_DELAY:-0.5}
+  OSINT_PAGE_TIMEOUT_MS: ${OSINT_PAGE_TIMEOUT_MS:-30000}
+  OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS: ${OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS:-90}
+  OSINT_DOMAIN_CHECK_RETRIES: ${OSINT_DOMAIN_CHECK_RETRIES:-2}
+  OSINT_EVIDENCE_HEADLESS: ${OSINT_EVIDENCE_HEADLESS:-true}
+  PAGE_WORKERS: ${PAGE_WORKERS:-3}
+  MAX_SCREENSHOTS_PER_SOURCE: ${MAX_SCREENSHOTS_PER_SOURCE:-5}
+  OSINT_POPUP_CAPTURE_LIMIT: ${OSINT_POPUP_CAPTURE_LIMIT:-2}
+  SOCIAL_POST_CAPTURE_LIMIT: ${SOCIAL_POST_CAPTURE_LIMIT:-8}
+  OSINT_PUBLIC_SOCIAL_CAPTURE_BUDGET: ${OSINT_PUBLIC_SOCIAL_CAPTURE_BUDGET:-25}
+  SOCIAL_POST_CAPTURE_STAGE_SECONDS: ${SOCIAL_POST_CAPTURE_STAGE_SECONDS:-60}
+  SOCIAL_POST_CAPTURE_TIMEOUT_SECONDS: ${SOCIAL_POST_CAPTURE_TIMEOUT_SECONDS:-12}
+
+  X_STORAGE_STATE_PATH: ${X_STORAGE_STATE_PATH:-/app/data/browser_sessions/x.json}
+  X_MAX_SCROLLS: ${X_MAX_SCROLLS:-12}
+  X_MAX_POSTS: ${X_MAX_POSTS:-100}
+  X_SCROLL_WAIT_MS: ${X_SCROLL_WAIT_MS:-900}
+  INSTAGRAM_STORAGE_STATE_PATH: ${INSTAGRAM_STORAGE_STATE_PATH:-/app/data/browser_sessions/instagram.json}
+  FACEBOOK_STORAGE_STATE_PATH: ${FACEBOOK_STORAGE_STATE_PATH:-/app/data/browser_sessions/facebook.json}
+  TELEGRAM_STORAGE_STATE_PATH: ${TELEGRAM_STORAGE_STATE_PATH:-/app/data/browser_sessions/telegram.json}
+  YOUTUBE_STORAGE_STATE_PATH: ${YOUTUBE_STORAGE_STATE_PATH:-/app/data/browser_sessions/youtube.json}
+  QUORA_STORAGE_STATE_PATH: ${QUORA_STORAGE_STATE_PATH:-/app/data/browser_sessions/quora.json}
+  INSTAGRAM_MAX_SCROLLS: ${INSTAGRAM_MAX_SCROLLS:-8}
+  FACEBOOK_MAX_SCROLLS: ${FACEBOOK_MAX_SCROLLS:-8}
+  TELEGRAM_MAX_SCROLLS: ${TELEGRAM_MAX_SCROLLS:-8}
+  YOUTUBE_MAX_SCROLLS: ${YOUTUBE_MAX_SCROLLS:-8}
+  QUORA_MAX_SCROLLS: ${QUORA_MAX_SCROLLS:-8}
+  INSTAGRAM_MAX_ITEMS: ${INSTAGRAM_MAX_ITEMS:-60}
+  FACEBOOK_MAX_ITEMS: ${FACEBOOK_MAX_ITEMS:-60}
+  TELEGRAM_MAX_ITEMS: ${TELEGRAM_MAX_ITEMS:-60}
+  YOUTUBE_MAX_ITEMS: ${YOUTUBE_MAX_ITEMS:-60}
+  QUORA_MAX_ITEMS: ${QUORA_MAX_ITEMS:-60}
+
 services:
+  tor:
+    build: ./docker/tor
+    profiles: ["darkweb"]
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -28,23 +108,40 @@ services:
       retries: 10
     restart: unless-stopped
 
+  searxng:
+    image: searxng/searxng@sha256:c7cc75852051bf6254afda6ed1b920dd1677d8efe4ab141bf558f02e582f4371
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-replace-this-local-searxng-secret}
+    volumes:
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   app:
     build: .
     environment:
+      <<: *collection-environment
       DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
       API_BASE_URL: http://api:8000
-      HEADLESS: "true"
+      SEARXNG_URL: http://searxng:8080
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
     ports:
       - "8501:8501"
     volumes:
       - ./data/browser_sessions:/app/data/browser_sessions:ro
-      - screenshots_data:/app/screenshots
       - evidence_data:/app/evidence
       - reports_data:/app/reports
     depends_on:
       postgres:
         condition: service_healthy
       api:
+        condition: service_healthy
+      searxng:
         condition: service_healthy
     restart: unless-stopped
 
@@ -57,6 +154,8 @@ services:
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
+    volumes:
+      - evidence_data:/app/evidence:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -75,19 +174,25 @@ services:
     group_add:
       - "${LOCAL_GID:-1000}"
     environment:
+      <<: *collection-environment
+      DARKWEB_TOR_PROXY: ${DARKWEB_TOR_PROXY:-socks5h://tor:9050}
       DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
       REDIS_URL: redis://redis:6379/0
-      HEADLESS: "true"
-      OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS: ${OSINT_SOURCE_CAPTURE_TIMEOUT_SECONDS:-60}
+      SEARXNG_URL: http://searxng:8080
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
+      EXTERNAL_CALLBACK_URL: ${EXTERNAL_CALLBACK_URL:-http://10.244.0.148:8000/api/v1/ingestion/web-scraper/callback}
+      EXTERNAL_DOMAIN_LIMIT: ${EXTERNAL_DOMAIN_LIMIT:-25}
+      EXTERNAL_REPORT_DIR: /app/reports
     volumes:
       - ./data/browser_sessions:/app/data/browser_sessions:ro
-      - screenshots_data:/app/screenshots
       - evidence_data:/app/evidence
       - reports_data:/app/reports
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      searxng:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import os; from redis import Redis; assert Redis.from_url(os.environ['REDIS_URL'], decode_responses=True).get('web-investigator:worker:heartbeat') == 'ready'"]
@@ -99,6 +204,5 @@ services:
 volumes:
   postgres_data:
   redis_data:
-  screenshots_data:
   evidence_data:
   reports_data:
