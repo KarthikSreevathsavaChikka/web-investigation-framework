@@ -98,6 +98,13 @@ class VirusTotalJobRequest(BaseModel):
 
 
 class ExternalInvestigationJobRequest(BaseModel):
+    requested_by: str = Field(default="", max_length=200, description="Analyst name supplied by the requesting system")
+
+    @field_validator("requested_by")
+    @classmethod
+    def normalize_requested_by(cls, value: str) -> str:
+        return value.strip()
+
     job_id: str = Field(min_length=1, max_length=200)
     complaint_id: str = Field(min_length=1, max_length=200)
     target_id: str = Field(min_length=1, max_length=200)

@@ -24,7 +24,7 @@ def _osint_summary(item: dict) -> InvestigationSummary:
     return InvestigationSummary(
         id=item["id"],
         component=ComponentName.OSINT,
-        target=item.get("target_domain", item.get("target_url", "")),
+        target=item.get("target_domain") or item.get("resolved_brand") or item.get("original_input") or item.get("target_url", ""),
         status=item.get("status", "Unknown"),
         started_at=item.get("started_at"),
         completed_at=item.get("completed_at"),
@@ -83,6 +83,8 @@ def get_osint_results(
         for row in osint.get_screenshot_summaries(investigation_id)
     }
     evidence = osint.get_evidence(investigation_id)
+    from services.screenshot_groups import annotate_groups
+    annotate_groups(evidence, EVIDENCE_DIR)
     for item in evidence:
         item["screenshot_url"] = (
             f"/api/v1/investigations/osint/{investigation_id}/screenshots/evidence/{item['id']}"
@@ -90,6 +92,16 @@ def get_osint_results(
         item["screenshot_summary"] = summaries.get(item.get("screenshot_path"))
         item.pop("screenshot_path", None)
     findings = osint.get_social_findings(investigation_id)
+    social_shots = []
+    for item in findings:
+        item['screenshot_groups'] = []
+        for path in item.get('screenshot_paths') or []:
+            shot = {'screenshot_path': path, 'source_url': item.get('post_url'), 'context_text': item.get('post_text')}
+            social_shots.append(shot)
+            item['screenshot_groups'].append(shot)
+    annotate_groups(social_shots, EVIDENCE_DIR)
+    for shot in social_shots:
+        shot.pop('screenshot_path', None)
     for item in findings:
         item["screenshot_urls"] = [
             f"/api/v1/investigations/osint/{investigation_id}/screenshots/social/{item['id']}/{index}"

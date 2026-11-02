@@ -212,6 +212,13 @@ thead{{display:table-header-group}}tr{{break-inside:avoid}}.summary{{display:gri
 .card{{border:1px solid #ccd6dd;padding:10px;overflow-wrap:anywhere}}small{{color:#586069}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:8pt}}
 .evidence{{border:1px solid #ccd6dd;padding:12px;margin:14px 0;break-inside:avoid}}.evidence img{{max-width:100%;height:auto;border:1px solid #8996a0}}
 @media screen{{body{{max-width:210mm;margin:0 auto;padding:16px;background:white}}.cover{{height:257mm}}}}
+/* Reader-focused screen and print layout */
+body{{line-height:1.65;color:#243247}}h1{{letter-spacing:-.5px}}h2{{font-size:14pt;border-bottom:2px solid #e2e8f0;padding:10px 0;margin:30px 0 14px;break-after:avoid}}h3{{break-after:avoid}}
+.overview-item,.card{{border-radius:8px;background:#f8fafc;border-color:#e2e8f0;padding:14px}}.overview-item h3{{font-size:9pt;color:#526479}}.overview-item p{{font-size:11pt;color:#17202a}}
+th,td{{border:0;border-bottom:1px solid #e2e8f0;padding:9px 8px;line-height:1.55}}th{{background:#edf2f7;color:#233e58;font-size:8pt}}tbody tr:nth-child(even){{background:#fafbfd}}
+.evidence{{border-color:#e2e8f0;border-radius:8px;padding:16px}}.evidence img{{display:block;margin:12px auto;border-color:#e2e8f0}}.cover-title h1{{text-decoration:none;letter-spacing:1px}}
+@media screen{{html{{background:#eef2f6}}body{{max-width:1000px;margin:24px auto;padding:40px;box-shadow:0 8px 32px #17202a12}}}}
+@media print{{body{{background:#fff}}a{{color:inherit}}.overview-item,.card{{box-shadow:none}}}}
 </style></head><body>
 <section class="cover">
 <div class="cover-head"><div class="cover-brand">{left_mark}</div><div class="cover-brand right">{right_mark}</div></div>
@@ -224,7 +231,7 @@ thead{{display:table-header-group}}tr{{break-inside:avoid}}.summary{{display:gri
 <h2>Executive summary</h2><div class="overview">{overview_html}</div>
 <p><strong>Overall collection status:</strong> {escape(str(coverage.get('status') or 'Unknown'))}. {escape(str(coverage.get('message') or ''))}</p>
 <p><strong>Risk score:</strong> {int(investigation.get('risk_score') or 0)}/100. A low score means few indicators were collected; it is not a safety rating.</p>
-<p><strong>Reading guide:</strong> The sections below show the target identity, evidence, sources, collection gaps, and technical search details. "No records" means no item was stored for that section.</p>
+<p><strong>Reading guide:</strong> The sections below show the target identity, evidence, sources and collection limitations. "No records" means no item was stored for that section.</p>
 <h2>1. Input and target resolution</h2>
 <div class="summary">
 <div class="card"><b>Original input</b><br>{escape(str(investigation.get('original_input') or ''))}</div>
@@ -242,9 +249,8 @@ thead{{display:table-header-group}}tr{{break-inside:avoid}}.summary{{display:gri
 <h2>Resolved / related domains</h2><p><small>Worldwide estimated visits, not site analytics. Yearly is a 12-month estimate or a projection of the latest month × 12. Missing values are unavailable, not zero.</small></p>{table(domain_rows, ['domain', 'status', 'http', 'monthly_visits', 'yearly_visits', 'traffic_status'])}<h3>Traffic estimate details</h3><ul>{traffic_notes_html or '<li>No domain estimates stored.</li>'}</ul>
 <h2>Certificate Transparency leads — not evidence</h2>{table(candidate_leads, ['domain', 'source_url', 'confidence', 'metadata_json', 'discovered_at'])}
 <h2>Search identities</h2>{table(identities, ['value', 'identity_type', 'confidence', 'reason'])}
-<h2>2. Search summary</h2>
-<p>{summary['configured_queries']} configured queries · {summary['raw_search_results']} raw results ·
-{summary['accepted_sources']} accepted sources · {summary['rejected_irrelevant']} rejected irrelevant ·
+<h2>2. Collection summary</h2>
+<p>{summary['accepted_sources']} accepted sources ·
 {summary['pages_visited']} pages visited · {summary['confirmed_evidence']} confirmed evidence findings ·
 {summary['public_documents']} public documents · {summary['screenshots_captured']} screenshots ·
 {summary['manual_required']} manual required · {summary['failures']} failures</p>
@@ -264,12 +270,8 @@ thead{{display:table-header-group}}tr{{break-inside:avoid}}.summary{{display:gri
 <h2>Manual social/review links</h2>{table(manual_links, ['query_id', 'value', 'source_url', 'metadata_json', 'discovered_at'])}
 <h2>Public documents</h2>{table(documents, ['document_type', 'source_url', 'relevant_pages', 'evidence_context'])}
 <h2>Public document page captures</h2>{document_capture_cards(documents)}
-<h2>6. Search execution</h2>{table(
-    [item for item in query_metrics if item.get('provider')],
-    ['query_id', 'name', 'provider', 'raw_results', 'accepted_results', 'failed']
-)}
-<h2>7. Explainable risk indicators</h2>{table(risks, ['category', 'indicator', 'value', 'points', 'confidence', 'source_url'])}
-<h2>8. Analyst notes</h2>{table(notes, ['created_at', 'note'])}
+<h2>6. Risk indicators and supporting evidence</h2>{table(risks, ['category', 'indicator', 'value', 'points', 'confidence', 'source_url'])}
+<h2>7. Analyst notes</h2>{table(notes, ['created_at', 'note'])}
 </body></html>"""
 
     @staticmethod

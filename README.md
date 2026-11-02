@@ -1,5 +1,9 @@
 # Web Investigator
 
+The separate **Online Gaming** project has moved to
+[`../online-gaming/`](../online-gaming/README.md). Its code, configuration, data
+and reviewer dashboard are maintained there.
+
 The optional **Dark-web references** workspace collects exact-domain mentions from
 supplied onion URLs using free Tor access. It includes queued runs, source coverage,
 and JSON evidence exports in both React and Streamlit. See

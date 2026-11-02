@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.shared import Inches, Cm, Pt
 
 from osint.storage import OSINTRepository
@@ -18,10 +20,37 @@ from core.time_utils import format_ist
 
 
 class OSINTDocxReportBuilder:
-    """Build a portable report containing only stored, target-validated evidence."""
+    """Build a portable report with stored evidence and its discovery sources."""
 
     def __init__(self, repository: OSINTRepository):
         self.repository = repository
+
+    @staticmethod
+    def _add_source_link(paragraph, url: str) -> None:
+        """Write a visible URL with an explicit Word hyperlink relationship."""
+        try:
+            parsed = urlsplit(url)
+            valid = parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+        except ValueError:
+            valid = False
+        if not valid:
+            paragraph.add_run(url or "Unavailable")
+            return
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True))
+        run = OxmlElement("w:r")
+        properties = OxmlElement("w:rPr")
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0563C1")
+        underline = OxmlElement("w:u")
+        underline.set(qn("w:val"), "single")
+        properties.extend([color, underline])
+        run.append(properties)
+        text = OxmlElement("w:t")
+        text.text = url
+        run.append(text)
+        hyperlink.append(run)
+        paragraph._p.append(hyperlink)
 
     def build(self, investigation_id: str) -> bytes:
         report = Document()
@@ -34,6 +63,15 @@ class OSINTDocxReportBuilder:
         normal = report.styles["Normal"]
         normal.font.name = "Arial"
         normal.font.size = Pt(10)
+        normal.paragraph_format.space_after = Pt(7)
+        normal.paragraph_format.line_spacing = 1.15
+        for name in ("Heading 1", "Heading 2", "Heading 3"):
+            style = report.styles[name]
+            style.font.name = "Arial"
+            style.paragraph_format.space_before = Pt(16)
+            style.paragraph_format.space_after = Pt(8)
+            style.paragraph_format.keep_with_next = True
+
         header = section.header
         header_table = header.add_table(rows=1, cols=2, width=Cm(17.8))
         header_table.columns[0].width = Cm(11)
@@ -95,6 +133,7 @@ class OSINTDocxReportBuilder:
         documents = self.repository.get_documents(investigation_id)
         social_findings = self.repository.get_social_findings(investigation_id)
         domains = self.repository.get_candidates(investigation_id)
+        sources = self.repository.get_sources(investigation_id)
         screenshot_summaries = {item.get("screenshot_path"): item for item in self.repository.get_screenshot_summaries(investigation_id)}
         report.add_heading(f"Web Scraping — {investigation.get('target_domain') or investigation_id}", level=heading_level)
         report.add_paragraph(f"Investigation reference: {investigation_id}")
@@ -161,6 +200,24 @@ class OSINTDocxReportBuilder:
                 f"Checked: {format_ist(item.get('traffic_refreshed_at'))}. {item.get('traffic_error') or ''}"
             )
 
+        report.add_heading("Source URLs", level=heading_level + 1)
+        report.add_paragraph(
+            "All discovered sources recorded for this investigation are listed below, including historical URLs "
+            "and non-page resources. Discovery alone does not establish that a source was captured or verified."
+        )
+        if not sources:
+            report.add_paragraph("No source URLs were recorded.")
+        for index, source in enumerate(sources, 1):
+            paragraph = report.add_paragraph()
+            paragraph.add_run(f"{index}. {source.get('title') or source['source_url']}").bold = True
+            self._add_source_link(report.add_paragraph("Source URL: "), source["source_url"])
+            report.add_paragraph(
+                f"Source type: {source.get('source_type') or 'unknown'} | "
+                f"Discovery query count: {source.get('discovered_by_queries', 0)}"
+            )
+            if source.get("snippet"):
+                report.add_paragraph(source["snippet"])
+
         reviews = self.repository.get_llm_reviews(investigation_id)
         if reviews:
             report.add_heading("AI relevance review — advisory", level=heading_level + 1)
@@ -194,7 +251,10 @@ class OSINTDocxReportBuilder:
             ):
                 cells = detail_table.add_row().cells
                 cells[0].text = label
-                cells[1].text = str(value)
+                if label in {"Source URL", "Final URL"}:
+                    self._add_source_link(cells[1].paragraphs[0], str(value))
+                else:
+                    cells[1].text = str(value)
                 for run in cells[0].paragraphs[0].runs:
                     run.font.bold = True
             report.add_paragraph(clean_evidence_text(item.get("context_text") or item.get("evidence_text")))
@@ -264,7 +324,7 @@ class OSINTDocxReportBuilder:
             report.add_heading("Verified public documents", level=heading_level + 1)
         for item in documents:
             report.add_heading(item.get("document_type") or "Public document", level=heading_level + 2)
-            report.add_paragraph(f"Source URL: {item['source_url']}")
+            self._add_source_link(report.add_paragraph("Source URL: "), item["source_url"])
             report.add_paragraph(f"Matched target: {item.get('matched_target_variant') or ''}")
             report.add_paragraph(f"Relevant pages: {', '.join(map(str, item.get('relevant_pages') or []))}")
             report.add_paragraph(clean_evidence_text(item.get("evidence_context"), limit=12_000))

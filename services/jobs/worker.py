@@ -63,11 +63,10 @@ def execute_job(job: dict, cancel_check=None) -> dict:
             )
         if resolution is None:
             resolution = TargetResolver().resolve(payload["target"], build_keyless_search_provider())
-        if not resolution.candidates:
-            raise RuntimeError(
-                "No target domain could be resolved. Enter a full domain or refine the brand name."
-            )
-        selected_target = target_for_domain(payload["target"], resolution.candidates[0].domain)
+        selected_target = (
+            target_for_domain(payload["target"], resolution.candidates[0].domain)
+            if resolution.candidates else payload["target"]
+        )
         orchestrator = IntelligenceOrchestrator()
         investigation_id = orchestrator.run(
             selected_target,

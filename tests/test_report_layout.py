@@ -27,6 +27,11 @@ class ReportLayoutTests(unittest.TestCase):
             repo = OSINTRepository(Path(directory) / "test.db")
             repo.create_investigation("EMPTY", DomainNormalizer.normalize("example.com"))
             soup = BeautifulSoup(OSINTReportBuilder(repo).build_html("EMPTY"), "html.parser")
+            headings = [h.get_text() for h in soup.select("h2")]
+            self.assertFalse(any("Search execution" in h for h in headings))
+            self.assertIn("2. Collection summary", headings)
+            self.assertIn("6. Risk indicators and supporting evidence", headings)
+            self.assertIn("7. Analyst notes", headings)
             empty_tables = 0
             for table in soup.select("table"):
                 cell = table.select_one("td[colspan]")

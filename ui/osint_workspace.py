@@ -216,7 +216,21 @@ def render_osint_workspace() -> None:
             st.metric("Domains discovered", len(resolution.candidates), border=True)
 
         if not resolution.candidates:
-            st.warning("No candidate domains were found. Refine the input or configure another search provider.")
+            st.info("No website domain was found. Application-name discovery runs all enabled applicable queries, including app listings, APK/IPA references, reviews, payments, social sources and documents.")
+            if st.button("Search application information", type="primary", disabled=bool(st.session_state.osint_job_ids)):
+                try:
+                    job = get_api_client().submit_osint(
+                        resolution.original_input,
+                        ["Keyless Web Search (no API key)"],
+                        authorized=True,
+                        brand=resolution.resolved_brand,
+                        resolution=asdict(resolution),
+                        query_budget=12,
+                    )
+                    st.session_state.osint_job_ids.append(job["id"])
+                    st.success("Application information search queued.")
+                except APIClientError as exc:
+                    st.error(str(exc))
         else:
             st.caption(
                 "All distinct brand-related domains found by the configured public search providers are shown. "

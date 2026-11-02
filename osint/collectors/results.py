@@ -23,7 +23,7 @@ class PublicSearchResultCollector:
     name = "public_search_results"
     SKIPPED_SOURCE_TYPES = {
         "social_x", "social_facebook", "social_instagram", "social_youtube",
-        "social_reddit", "social_quora", "telegram", "app_download",
+        "social_reddit", "social_quora", "telegram",
     }
     PDF_MEDIA_TYPES = {"application/pdf", "application/x-pdf"}
     DOCX_MEDIA_TYPES = {
@@ -248,6 +248,7 @@ class PublicSearchResultCollector:
                     metadata={
                         "final_url": response.url,
                         "meta_description": description,
+                        "page_text": visible_text[:20_000] if not target.domain or source.get("source_type") == "app_download" else "",
                         "canonical_url": canonical,
                         "document_type": content_type,
                         "source_type": source.get("source_type"),

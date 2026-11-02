@@ -61,3 +61,7 @@ artifacts/
 
 # Local documentation is not published to GitHub
 docs/
+
+# Evidence packaging source is application code, not collected evidence.
+!services/evidence/
+!services/evidence/*.py

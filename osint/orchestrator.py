@@ -81,14 +81,18 @@ class IntelligenceOrchestrator:
                 raise InvestigationCancelled("Investigation cancelled by operator")
 
         investigation_id = ""
-        target = DomainNormalizer.normalize(raw_target)
+        name_only = bool(resolution and not resolution.candidates and resolution.input_type in {"brand_or_app_name", "partial_name"})
+        target = (
+            NormalizedTarget(raw_target, "", "", brand=resolution.resolved_brand)
+            if name_only else DomainNormalizer.normalize(raw_target)
+        )
         target = NormalizedTarget(target.raw_input, target.domain, target.url, brand=brand or target.brand)
         investigation_id = f"OSINT_{uuid.uuid4().hex[:10].upper()}"
         queries = self.dork_generator.generate(target, brand=brand)
         context = CollectorContext(
             queries=queries,
             request_timeout=max(3, min(int(os.getenv("OSINT_REQUEST_TIMEOUT", "10")), 60)),
-            search_query_budget=max(
+            search_query_budget=len(queries) if name_only else max(
                 1,
                 min(
                     int(
@@ -106,8 +110,15 @@ class IntelligenceOrchestrator:
         self.repository.save_queries(investigation_id, queries)
         raise_if_cancelled()
 
-        collectors = [self.COLLECTORS[name]() for name in enabled_collectors if name in self.COLLECTORS]
+        collector_names = list(enabled_collectors)
+        if name_only:
+            domain_collectors = {"DNS", "RDAP", "Public website", "Certificate Transparency (crt.sh)", "Wayback historical URLs"}
+            collector_names = [name for name in collector_names if name not in domain_collectors]
+            if not any(name in collector_names for name in ("Brave Search", "Google public search", "Keyless Web Search (no API key)")):
+                collector_names.append("Keyless Web Search (no API key)")
+        collectors = [self.COLLECTORS[name]() for name in collector_names if name in self.COLLECTORS]
         all_observations = []
+        failed_collectors = False
         try:
             readiness = run_readiness(target, collectors, timeout=context.request_timeout, cancel_check=cancel_check)
             raise_if_cancelled()
@@ -125,6 +136,7 @@ class IntelligenceOrchestrator:
                 for future in as_completed(future_map):
                     raise_if_cancelled()
                     result = future.result()
+                    failed_collectors = failed_collectors or result.status == "FAILED"
                     self.repository.save_collector_result(investigation_id, result)
                     all_observations.extend(result.observations)
         except InvestigationCancelled:
@@ -158,6 +170,21 @@ class IntelligenceOrchestrator:
                         target.url, confidence=0.0, metadata=profile),
         ]))
         discovery_candidates = self.repository.get_sources(investigation_id)
+        if name_only:
+            search_failed = failed_collectors or any(item.entity_type == "QUERY_EXECUTION" and item.metadata.get("status") in {"failed", "partial"} for item in all_observations)
+            message = (
+                f"Found {len(discovery_candidates)} related application source(s)."
+                if discovery_candidates else
+                "Application search was incomplete; see search-provider diagnostics."
+                if search_failed else "No relevant app information found."
+            )
+            self.repository.save_collector_result(investigation_id, CollectorResult(
+                "application_discovery", "PARTIAL" if search_failed else "COMPLETED", [
+                    Observation("application_discovery", "Applications", "APPLICATION_DISCOVERY", message,
+                                "", confidence=0.0, metadata={"application_name": target.brand,
+                                    "source_count": len(discovery_candidates), "domain_resolved": False}),
+                ],
+            ))
         excluded = [item for item in discovery_candidates if not is_content_page_url(item["source_url"])]
         self.repository.save_collector_result(investigation_id, CollectorResult("source_selection", "COMPLETED", [
             Observation("source_selection", "Collection diagnostics", "SOURCE_SELECTION", str(len(excluded)),
@@ -228,7 +255,8 @@ class IntelligenceOrchestrator:
 
         # A lightweight HTTP request may be blocked while a public browser can
         # render the supplied page, so always capture the input URL independently.
-        self.repository.ensure_first_party_source(investigation_id, target, queries)
+        if target.url:
+            self.repository.ensure_first_party_source(investigation_id, target, queries)
         evidence_budget = max(0, min(int(os.getenv("OSINT_EVIDENCE_SOURCE_BUDGET", "8")), 25))
         evidence_tasks = self.repository.get_evidence_tasks(investigation_id, evidence_budget)
         social_capture_budget = max(0, min(int(os.getenv("OSINT_PUBLIC_SOCIAL_CAPTURE_BUDGET", "25")), 25))

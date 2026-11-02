@@ -143,6 +143,7 @@ class APITests(unittest.TestCase):
     def test_creates_external_combined_investigation_job(self):
         response = self.client.post("/api/v1/jobs/external", json={
             "job_id": "EXT-42",
+            "requested_by": " ajay ",
             "complaint_id": "CMP-7",
             "target_id": "TGT-9",
             "target": "fairwin247.co",
@@ -159,6 +160,7 @@ class APITests(unittest.TestCase):
         for returned in (response.json(), listed, detail):
             self.assertEqual(returned["payload"]["external_job_id"], "EXT-42")
             self.assertEqual(returned["payload"]["complaint_id"], "CMP-7")
+            self.assertEqual(returned["payload"]["requested_by"], "ajay")
             self.assertEqual(returned["payload"]["target_id"], "TGT-9")
             self.assertEqual(returned["payload"]["target"], "fairwin247.co")
 

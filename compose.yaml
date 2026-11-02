@@ -168,6 +168,36 @@ services:
       retries: 5
     restart: unless-stopped
 
+  entity-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["python", "-m", "services.entity_worker"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
+    volumes:
+      - evidence_data:/app/evidence:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  case-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ["python", "-m", "services.case_scheduler"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-investigator}:${POSTGRES_PASSWORD:-change-this-local-password}@postgres:5432/${POSTGRES_DB:-web_investigator}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   worker:
     build: .
     command: ["python", "-m", "services.jobs.worker"]

@@ -397,8 +397,8 @@ class OSINTRepository:
                     resolution.normalized_input if resolution else target.domain,
                     resolution.input_type if resolution else "domain",
                     resolution.resolved_brand if resolution else target.brand,
-                    selected.confidence if selected else 1.0,
-                    selected.reason if selected else "Valid domain supplied directly",
+                    selected.confidence if selected else (1.0 if target.domain else 0.0),
+                    selected.reason if selected else ("Valid domain supplied directly" if target.domain else "No domain resolved; application-name discovery"),
                 ),
             )
             if resolution:

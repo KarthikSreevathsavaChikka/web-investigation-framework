@@ -1,3 +1,5 @@
+import { ScreenshotGallery } from "./ScreenshotGallery";
+import { EnrichmentResults } from "./EntityDemoPage";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Download, ExternalLink, Eye } from "lucide-react";
 import { ReactNode, useState } from "react";
@@ -7,6 +9,7 @@ import { EmptyState, ErrorState, Loading, PageHeader, StatCard, StatusBadge, for
 import type { InvestigationResults } from "../types";
 
 const sections = [
+  ["enrichment", "OCR & connections"],
   ["overview", "Overview"], ["domains", "Domains"], ["findings", "Findings"],
   ["evidence", "Evidence captures"], ["queries", "Search queries"], ["sources", "Sources"],
   ["documents", "Documents"], ["collectors", "Collector status"], ["risks", "Risk analysis"], ["notes", "Analyst notes"],
@@ -38,14 +41,19 @@ function sectionCount(data: InvestigationResults, section: Section) {
 }
 
 function ResultSection({ data, section, count }: { data: InvestigationResults; section: Section; count: (name: string) => number }) {
+  if (section === "enrichment") return <EnrichmentResults id={data.id}/>;
   if (section === "overview") return <>
     <section className="stats-grid"><StatCard label="Search results" value={count("raw_search_results")} hint="Returned before filtering"/><StatCard label="Relevant sources" value={count("accepted_sources")} hint="Passed target validation"/><StatCard label="Pages visited" value={count("pages_visited")} hint="Opened by browser workers"/><StatCard label="Screenshots" value={count("screenshots_captured")} hint="Stored visual evidence"/></section>
     <section className="panel"><div className="panel-heading"><div><h2>Collection coverage</h2><p>{text(data.investigation.coverage?.message, "No coverage message was stored.")}</p></div><StatusBadge status={text(data.investigation.coverage?.status, "Unknown")}/></div></section>
     <section className="panel"><h2>Scraping funnel</h2><div className="funnel"><Metric label="Queries configured" value={count("configured_queries")}/><Metric label="Results reviewed" value={count("raw_search_results")}/><Metric label="Target-related sources" value={count("accepted_sources")}/><Metric label="Evidence confirmed" value={count("confirmed_evidence")}/></div></section>
   </>;
   if (section === "domains") return <DataTable empty="No candidate domains were stored." columns={["Domain", "Confidence", "Status", "HTTP", "Monthly visits", "Reason"]} rows={data.domains.map((d) => [<strong>{text(d.domain)}</strong>, `${Math.round(Number(d.confidence || 0) * 100)}%`, text(d.detailed_status || d.domain_status), text(d.http_status), text(d.monthly_visits), text(d.reason)])}/>;
-  if (section === "findings") return data.findings.length ? <div className="result-list">{data.findings.map((f, i) => <article className="result-card evidence-card" key={text(f.id, String(i))}><h3>{text(f.title, text(f.platform))}</h3>{Array.isArray(f.screenshot_urls) && f.screenshot_urls.map((shot, index) => <div key={text(shot)}><img src={text(shot)} alt={`${text(f.platform)} highlighted capture`} loading="lazy"/><div className="screenshot-summary"><strong>Screenshot summary</strong><p>{text(Array.isArray(f.screenshot_summaries) ? f.screenshot_summaries[index] : "", "Summary unavailable for this screenshot.")}</p></div></div>)}{(!Array.isArray(f.screenshot_urls) || !f.screenshot_urls.length) && <p>{text(f.post_text || f.search_snippet)}</p>}<small>{text(f.platform)} · {Math.round(Number(f.confidence || 0) * 100)}% confidence · {text(f.status)}</small>{url(f.post_url) && <a href={url(f.post_url)} target="_blank" rel="noreferrer">Open source <ExternalLink size={14}/></a>}</article>)}</div> : <EmptyState title="Nothing to display" body="No automated social or review findings were stored."/>;
-  if (section === "evidence") return data.evidence.length ? <div className="result-list">{data.evidence.map((e, i) => { const hasScreenshot = typeof e.screenshot_url === "string" && Boolean(e.screenshot_url); return <article className="result-card evidence-card" key={text(e.id, String(i))}><h3>{text(e.page_title, text(e.query_name))}</h3>{hasScreenshot && <img src={text(e.screenshot_url)} alt={`Highlighted evidence captured from ${text(e.page_title, "source page")}`} loading="lazy"/>}{hasScreenshot && <div className="screenshot-summary"><strong>Screenshot summary</strong><p>{text(e.screenshot_summary, "Summary unavailable for this screenshot.")}</p></div>}{!hasScreenshot && <p>{text(e.context_text || e.evidence_text)}</p>}<small>{text(e.query_category)} · {Math.round(Number(e.confidence || 0) * 100)}% confidence · {text(e.accessibility_status)}</small>{url(e.final_url || e.source_url) && <a href={url(e.final_url || e.source_url)} target="_blank" rel="noreferrer">Open source <ExternalLink size={14}/></a>}</article>;})}</div> : <EmptyState title="Nothing to display" body="No confirmed evidence captures were stored."/>;
+  if (section === "findings") return <ScreenshotGallery rows={data.findings.flatMap(f => {
+    const shots = Array.isArray(f.screenshot_urls) ? f.screenshot_urls : [];
+    if(!shots.length) return [f];
+    return shots.map((shot, i) => ({...f, ...(Array.isArray(f.screenshot_groups) ? f.screenshot_groups[i] : {}), screenshot_url: shot, screenshot_summary: Array.isArray(f.screenshot_summaries) ? f.screenshot_summaries[i] : ''}));
+  })}/>;
+  if (section === "evidence") return <ScreenshotGallery rows={data.evidence}/>;
   if (section === "queries") return <DataTable empty="No search queries were stored." columns={["ID", "Query", "Category", "Priority", "Provider"]} rows={data.queries.map((q) => [text(q.query_id), text(q.query), text(q.category), text(q.priority), text(q.provider)])}/>;
   if (section === "sources") return <CardList empty="No target-related sources passed validation." items={data.sources.map((s) => ({ title: text(s.title, text(s.source_type)), body: text(s.snippet), meta: `${text(s.source_type)} · discovered by ${text(s.discovered_by_queries, "0")} queries`, link: url(s.source_url) }))}/>;
   if (section === "documents") return <CardList empty="No public documents were downloaded." items={data.documents.map((d) => ({ title: text(d.file_name, text(d.document_type)), body: text(d.evidence_context), meta: `${text(d.relevance_status)} · ${text(d.size_bytes, "0")} bytes`, link: url(d.final_url || d.source_url) }))}/>;

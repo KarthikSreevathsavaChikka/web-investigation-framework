@@ -188,6 +188,7 @@ def _add_executive_summary(
         ("Report generated", format_ist(generated_at)),
         ("External job ID", payload.get("external_job_id")),
         ("Complaint ID", payload.get("complaint_id")),
+        ("Requested by", payload.get("requested_by") or "Not supplied"),
         ("Target ID", payload.get("target_id")),
         ("Received target", payload["target"]),
         ("Resolved brand", resolution.resolved_brand or "Unknown"),

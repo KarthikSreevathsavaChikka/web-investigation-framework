@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from services.api.routers import health, investigations, jobs
+from services.api.routers import cases
 
 app = FastAPI(
     title="Web Investigation Framework API",
@@ -10,8 +11,12 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(investigations.router)
 app.include_router(jobs.router)
+app.include_router(cases.router)
 
 
 @app.get("/", include_in_schema=False)
 def root() -> dict[str, str]:
     return {"service": "web-investigation-api", "docs": "/docs", "health": "/health/ready"}
+
+from services.api.routers import entities
+app.include_router(entities.router)

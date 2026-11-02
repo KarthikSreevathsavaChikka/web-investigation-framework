@@ -100,7 +100,11 @@ def run_readiness(target, collectors, *, timeout=5, cancel_check=None) -> Collec
             raise InvestigationCancelled("Cancelled during collection readiness checks")
 
     check_cancelled()
-    checks.append({"component": "Target website", **website_readiness(target, timeout)})
+    if target.url:
+        checks.append({"component": "Target website", **website_readiness(target, timeout)})
+    else:
+        checks.append({"component": "Target website", "status": "skipped",
+                       "reason": "No domain resolved; collecting information by application name."})
     for collector in collectors:
         check_cancelled()
         session_path = getattr(collector, "session_path", None)

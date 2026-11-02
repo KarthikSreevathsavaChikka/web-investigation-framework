@@ -148,13 +148,14 @@ class TargetResolver:
         # The derived identity is deliberately accepted only for long mirror labels;
         # short numeric brands such as Fun88 retain their digits.
         identities = {value for value in (needle, derived) if len(value) >= 4}
+        text_identities = identities | {" ".join(re.findall(r"[a-z0-9]+", input_value.lower()))}
         scored = []
         for domain, matches in grouped.items():
             domain_label = re.sub(r"[^a-z0-9]", "", domain.split(".", 1)[0])
             domain_match = any(identity in domain_label or domain_label in identity for identity in identities)
             direct_text_matches = [
                 item for item in matches
-                if any(re.search(rf"(?<![a-z0-9]){re.escape(identity)}(?![a-z0-9])", re.sub(r"[^a-z0-9]+", " ", f"{item.title} {item.snippet}".lower())) for identity in identities)
+                if any(re.search(rf"(?<![a-z0-9]){re.escape(identity)}(?![a-z0-9])", re.sub(r"[^a-z0-9]+", " ", f"{item.title} {item.snippet}".lower())) for identity in text_identities if identity)
             ]
             # Fuzzy similarity alone produced false targets such as youtubekids.com
             # for Puntit. A candidate must contain the identity directly in its domain,
@@ -203,6 +204,8 @@ class TargetResolver:
     def build_search_identities(target: NormalizedTarget) -> list[SearchIdentity]:
         """Build conservative, auditable aliases without inventing unrelated brands."""
         domain = target.domain.casefold().removeprefix("www.")
+        if not domain:
+            return [SearchIdentity(target.brand, "EXACT_BRAND", 1.0, "Application name supplied by the operator")]
         label = domain.split(".", 1)[0]
         brand = " ".join((target.brand or label).split())
         identities = [SearchIdentity(domain, "DOMAIN", 1.0, "Resolved target domain")]

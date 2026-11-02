@@ -95,13 +95,47 @@ class DorkGenerator:
 
     def generate(self, target: NormalizedTarget, brand: str | None = None) -> list[DorkQuery]:
         resolved_brand = (brand or target.brand or target.domain.split(".", 1)[0]).strip()
-        main_brand = TargetResolver.derive_main_brand(resolved_brand)
         queries = []
+        if not target.domain:
+            # Every query remains anchored to the supplied name. Never render
+            # domain templates with an empty site: or an empty quoted identity.
+            name = resolved_brand.replace('"', ' ').strip()
+            templates = (
+                '"{name}" app',
+                '"{name}" APK Android',
+                '"{name}" site:play.google.com/store/apps',
+                '"{name}" site:apps.apple.com',
+                '"{name}" IPA iOS',
+                '"{name}" app developer package version',
+                '"{name}" site:apkpure.com',
+                '"{name}" site:apkmirror.com',
+                '"{name}" application download',
+                '"{name}" app reviews',
+                '"{name}" app support contact',
+                '"{name}"',
+            )
+            queries = [DorkQuery(
+                query_id=f"APP_{index:03d}", category="applications",
+                name="Application name discovery", priority="high",
+                query=template.format(name=name),
+                description="Find app listings, download references and related information by name",
+                evidence_keywords=("apk", "ipa", "android", "ios", "developer", "version", "package"),
+            ) for index, template in enumerate(templates, 1)]
+        main_brand = TargetResolver.derive_main_brand(resolved_brand)
         for entry in self.load():
             if not entry["enabled"]:
                 continue
+            template = str(entry["query"])
+            if not target.domain:
+                # Certificate Transparency queries need an actual domain. Other
+                # catalog topics can search for the application's name.
+                if entry["category"] == "certificate_transparency":
+                    continue
+                template = template.replace('-site:{domain}', '')
+                template = template.replace('site:{domain}', '"{brand}"')
+                template = template.replace('{domain}', '{brand}')
             try:
-                rendered = str(entry["query"]).format(
+                rendered = template.format(
                     domain=target.domain,
                     brand=resolved_brand,
                     main_brand=main_brand,
@@ -129,7 +163,15 @@ class DorkGenerator:
                     document_type=str(entry.get("document_type", "pdf" if "filetype:pdf" in rendered.casefold() else "")),
                 )
             )
-        return sorted(queries, key=lambda item: (self.PRIORITY_ORDER.get(item.priority, 9), item.query_id))
+        ordered = sorted(queries, key=lambda item: (self.PRIORITY_ORDER.get(item.priority, 9), item.query_id))
+        if not target.domain:
+            # Domain and brand templates can become identical after adaptation.
+            # Run each distinct query once, matching the stored query catalog.
+            distinct = {}
+            for query in ordered:
+                distinct.setdefault(query.query, query)
+            return list(distinct.values())
+        return ordered
 
     @staticmethod
     def _derive_keywords(query_template: str) -> list[str]:

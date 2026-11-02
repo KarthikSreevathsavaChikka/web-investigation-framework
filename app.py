@@ -4,6 +4,7 @@ from ui.external_jobs_workspace import render_external_jobs_workspace
 from ui.osint_workspace import render_osint_workspace
 from ui.virustotal_workspace import render_virustotal_workspace
 from ui.darkweb_workspace import render_darkweb_workspace
+from ui.cases_workspace import render_cases_workspace
 
 # Page Configuration
 st.set_page_config(
@@ -14,6 +15,7 @@ st.set_page_config(
 )
 
 pages = [
+    st.Page(render_cases_workspace, title="Cases and evidence", icon=":material/folder:"),
     st.Page(render_darkweb_workspace, title="Dark-web references", icon=":material/travel_explore:"),
     st.Page(
         render_osint_workspace,

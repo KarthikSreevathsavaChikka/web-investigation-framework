@@ -1,3 +1,4 @@
+import { EntityDemoPage } from "./pages/EntityDemoPage";
 import { Activity, BriefcaseBusiness, LayoutDashboard, Menu, PlusCircle, Search, ShieldCheck, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -13,9 +14,10 @@ import { DarkwebPage } from "./pages/DarkwebPage";
 const navigation = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/new", label: "New scrape", icon: PlusCircle },
-  { to: "/darkweb", label: "Dark-web references", icon: ShieldCheck },
+  { to: "/entity-demo", label: "Entity discovery", icon: Search },
   { to: "/investigations", label: "Scraping results", icon: Search },
   { to: "/external-jobs", label: "External jobs", icon: BriefcaseBusiness },
+  { to: "/darkweb", label: "Dark-web references", icon: ShieldCheck },
 ];
 
 export function App() {
@@ -34,6 +36,7 @@ export function App() {
     <main>
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setOpen(true)} aria-label="Open navigation"><Menu/></button><span>Web scraping operations</span><ApiStatus/></header>
       <div className="page"><Routes>
+        <Route path="/entity-demo" element={<EntityDemoPage/>}/>
         <Route path="/" element={<DashboardPage/>}/>
         <Route path="/investigations" element={<InvestigationsPage/>}/>
         <Route path="/new" element={<NewInvestigationPage/>}/>
