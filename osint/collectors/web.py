@@ -9,6 +9,7 @@ from osint.dorks import DorkGenerator
 from osint.http import get_public_url
 from osint.models import NormalizedTarget, Observation
 from osint.normalizer import DomainNormalizer
+from osint.target_profile import extract_profile_observations
 
 
 class PublicWebCollector(Collector):
@@ -29,6 +30,7 @@ class PublicWebCollector(Collector):
         observations = [
             Observation(self.name, "Domain footprint", "PAGE_TITLE", soup.title.string.strip(), response.url, 0.9)
         ] if soup.title and soup.title.string else []
+        observations.extend(extract_profile_observations(response.text, response.url))
 
         social_hosts = {host: platform for platform, host in DorkGenerator.SOCIAL_SITES.items()}
         seen = set()

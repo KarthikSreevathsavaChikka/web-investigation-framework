@@ -29,14 +29,14 @@ class SourceClassifier:
         host = (parsed.hostname or "").lower()
         target_root = registrable_domain(target_domain)
         source_root = registrable_domain(host)
-        if host == target_domain or source_root == target_root:
+        if target_domain and (host == target_domain or source_root == target_root):
             return "target_domain" if host in {target_domain, target_root, f"www.{target_root}"} else "target_subdomain"
         for known_host, source_type in cls.HOST_TYPES.items():
             if host == known_host or host.endswith(f".{known_host}"):
                 return source_type
         if source_root in cls.REVIEW_HOSTS:
             return "review_site"
-        if source_root in cls.APP_HOSTS or parsed.path.lower().endswith((".apk", ".ipa")):
+        if any(host == known or host.endswith(f".{known}") for known in cls.APP_HOSTS) or parsed.path.lower().endswith((".apk", ".ipa")):
             return "app_download"
         suffix = PurePosixPath(parsed.path.lower()).suffix
         if suffix == ".pdf":

@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urljoin, urlsplit
 
 import requests
+import time
 
 from osint.normalizer import DomainNormalizer
 
@@ -29,16 +30,21 @@ def get_public_url(
         parsed = urlsplit(current_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise UnsafeTargetError("Collector URL must use HTTP(S) and include a hostname.")
-        if not DomainNormalizer.public_addresses(parsed.hostname):
-            raise UnsafeTargetError(f"Collector URL does not resolve to a public address: {parsed.hostname}")
-
-        response = requests.get(
-            current_url,
-            headers=headers,
-            timeout=timeout,
-            allow_redirects=False,
-            stream=max_bytes is not None,
-        )
+        for attempt in range(2):
+            if not DomainNormalizer.public_addresses(parsed.hostname):
+                raise UnsafeTargetError(f"Collector URL does not resolve to a public address: {parsed.hostname}")
+            try:
+                response = requests.get(
+                    current_url, headers=headers, timeout=timeout,
+                    allow_redirects=False, stream=max_bytes is not None,
+                )
+                break
+            except requests.exceptions.SSLError:
+                raise
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt:
+                    raise
+                time.sleep(0.5)
         if response.is_redirect or response.is_permanent_redirect:
             location = response.headers.get("Location")
             if not location:

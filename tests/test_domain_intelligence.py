@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import requests
 
-from osint.domain_intelligence import DomainIntelligenceService, SimilarwebTrafficProvider
+from osint.domain_intelligence import DomainIntelligenceService, SimilarwebTrafficProvider, http_status_meaning
 from osint.report import OSINTReportBuilder
 from osint.storage import OSINTRepository
 from osint.models import NormalizedTarget
@@ -20,6 +20,14 @@ class Response:
 
 
 class DomainIntelligenceTests(unittest.TestCase):
+    def test_http_status_meanings_are_analyst_friendly(self):
+        self.assertEqual(
+            http_status_meaning("403"),
+            "Server exists but blocks automated access, your location, or this user.",
+        )
+        self.assertEqual(http_status_meaning("404"), "Server exists, but this page was not found.")
+        self.assertIn("redirecting", http_status_meaning("200", "Active – Redirected"))
+
     def service(self, responses, traffic=None):
         def request(*args, **kwargs):
             value = responses.pop(0)

@@ -17,6 +17,7 @@ async def launch_browser_session(
     *,
     headless: bool,
     viewport: dict[str, int] | None = None,
+    storage_state: str | None = None,
 ) -> BrowserResources:
     """Launch Chromium with the project's existing system-browser fallback policy."""
     playwright = await async_playwright().start()
@@ -44,12 +45,17 @@ async def launch_browser_session(
             if not browser_executable:
                 raise
             browser = await playwright.chromium.launch(headless=headless, args=launch_args)
-        context = await browser.new_context(
-            viewport=viewport or {"width": 1440, "height": 900},
-            user_agent=(
+        context_options = {
+            "viewport": viewport or {"width": 1440, "height": 900},
+            "user_agent": (
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             ),
+        }
+        if storage_state:
+            context_options["storage_state"] = storage_state
+        context = await browser.new_context(
+            **context_options,
         )
         return BrowserResources(playwright, browser, context)
     except Exception:

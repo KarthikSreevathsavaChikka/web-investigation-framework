@@ -37,7 +37,12 @@ class TargetResolver:
     EXCLUDED_DOMAINS = {
         "facebook.com", "instagram.com", "linkedin.com", "reddit.com", "t.me",
         "twitter.com", "x.com", "youtube.com", "wikipedia.org",
+        "bing.com", "duckduckgo.com", "google.com", "google.co.in", "search.google",
     }
+    RELATED_DOMAIN_CONTEXT = (
+        "bet", "betting", "bets", "casino", "sportsbook", "gaming", "games",
+        "wager", "bonus", "deposit", "withdrawal", "login", "register", "play",
+    )
 
     @staticmethod
     def classify(raw_input: str) -> str:
@@ -74,32 +79,31 @@ class TargetResolver:
             target = DomainNormalizer.normalize(normalized_input)
             root = registrable_domain(target.domain)
             brand = self.derive_main_brand(root)
-            candidate = TargetCandidate(root, 1.0, "Valid domain supplied directly", 1)
-            return TargetResolution(raw_input, normalized_input.lower(), input_type, brand, [candidate])
+            primary = TargetCandidate(root, 1.0, "Primary domain supplied directly", 1)
+            candidates = [primary]
+            # A supplied domain remains authoritative, but it is also useful as a
+            # seed for finding conservative mirror/related-domain candidates.
+            if provider is not None and provider.available:
+                results, _ = self._search(brand, provider)
+                related = self.rank_candidates(brand, results, conservative_identity=root)
+                candidates.extend(item for item in related if item.domain != root)
+            return TargetResolution(raw_input, normalized_input.lower(), input_type, brand, candidates)
 
         if provider is None or not provider.available:
             raise ResolutionProviderUnavailable(
                 "Brand and partial-name resolution requires an enabled search provider."
             )
-        results = []
-        provider_errors = []
-        request_delay = max(0.0, min(float(os.getenv("OSINT_SEARCH_REQUEST_DELAY", "1.5")), 5.0))
-        compact_brand = re.sub(r"[^a-zA-Z0-9]", "", normalized_input)
-        for index, template in enumerate(self.DISCOVERY_QUERIES, start=1):
-            query = template.format(brand=normalized_input, compact_brand=compact_brand)
-            try:
-                results.extend(provider.search(query, query_id=f"RESOLVE_{index:02d}", count=20))
-            except Exception as exc:
-                provider_errors.append(str(exc))
-                break
-            if request_delay and index < len(self.DISCOVERY_QUERIES):
-                time.sleep(request_delay)
+        results, provider_errors = self._search(normalized_input, provider)
         if not results and provider_errors:
             raise ResolutionProviderUnavailable(
                 "Public search could not resolve this brand without being rate-limited. "
                 f"{provider_errors[-1]} You can still enter a full domain directly."
             )
-        candidates = self.rank_candidates(normalized_input, results)
+        candidates = self.rank_candidates(
+            normalized_input,
+            results,
+            conservative_identity=normalized_input,
+        )
         return TargetResolution(
             raw_input,
             normalized_input.lower(),
@@ -108,7 +112,29 @@ class TargetResolver:
             candidates,
         )
 
-    def rank_candidates(self, input_value: str, results: list[SearchResult]) -> list[TargetCandidate]:
+    def _search(self, identity: str, provider: SearchProvider) -> tuple[list[SearchResult], list[str]]:
+        results: list[SearchResult] = []
+        provider_errors: list[str] = []
+        request_delay = max(0.0, min(float(os.getenv("OSINT_RESOLUTION_REQUEST_DELAY", "0")), 5.0))
+        compact_brand = re.sub(r"[^a-zA-Z0-9]", "", identity)
+        for index, template in enumerate(self.DISCOVERY_QUERIES, start=1):
+            query = template.format(brand=identity, compact_brand=compact_brand)
+            try:
+                results.extend(provider.search(query, query_id=f"RESOLVE_{index:02d}", count=20))
+            except Exception as exc:
+                provider_errors.append(str(exc))
+                break
+            if request_delay and index < len(self.DISCOVERY_QUERIES):
+                time.sleep(request_delay)
+        return results, provider_errors
+
+    def rank_candidates(
+        self,
+        input_value: str,
+        results: list[SearchResult],
+        *,
+        conservative_identity: str | None = None,
+    ) -> list[TargetCandidate]:
         grouped: dict[str, list[SearchResult]] = defaultdict(list)
         for result in results:
             hostname = (urlsplit(result.url).hostname or "").lower()
@@ -122,13 +148,14 @@ class TargetResolver:
         # The derived identity is deliberately accepted only for long mirror labels;
         # short numeric brands such as Fun88 retain their digits.
         identities = {value for value in (needle, derived) if len(value) >= 4}
+        text_identities = identities | {" ".join(re.findall(r"[a-z0-9]+", input_value.lower()))}
         scored = []
         for domain, matches in grouped.items():
             domain_label = re.sub(r"[^a-z0-9]", "", domain.split(".", 1)[0])
             domain_match = any(identity in domain_label or domain_label in identity for identity in identities)
             direct_text_matches = [
                 item for item in matches
-                if any(re.search(rf"(?<![a-z0-9]){re.escape(identity)}(?![a-z0-9])", re.sub(r"[^a-z0-9]+", " ", f"{item.title} {item.snippet}".lower())) for identity in identities)
+                if any(re.search(rf"(?<![a-z0-9]){re.escape(identity)}(?![a-z0-9])", re.sub(r"[^a-z0-9]+", " ", f"{item.title} {item.snippet}".lower())) for identity in text_identities if identity)
             ]
             # Fuzzy similarity alone produced false targets such as youtubekids.com
             # for Puntit. A candidate must contain the identity directly in its domain,
@@ -141,6 +168,20 @@ class TargetResolver:
                 default=0.0,
             )
             combined_text = " ".join(f"{item.title} {item.snippet}" for item in matches).lower()
+            if conservative_identity:
+                brand_identity = re.sub(r"[^a-z0-9]", "", self.derive_main_brand(conservative_identity).lower())
+                remainder = domain_label.replace(brand_identity, "", 1) if brand_identity in domain_label else domain_label
+                numeric_mirror = bool(remainder) and remainder.isdigit()
+                contextual_domain = any(word in domain_label for word in self.RELATED_DOMAIN_CONTEXT)
+                contextual_result = any(word in combined_text for word in self.RELATED_DOMAIN_CONTEXT)
+                # Related-domain mode is intentionally stricter than ordinary brand
+                # resolution. A shared word alone (for example a product brand on a
+                # retailer) is not enough to add another investigation target.
+                exact_brand_label = not remainder
+                if not domain_match or not (
+                    numeric_mirror or contextual_domain or (exact_brand_label and contextual_result)
+                ):
+                    continue
             relevance = 1.0 if any(word in combined_text for word in ("official", "betting", "casino", "sportsbook")) else 0.0
             official_signal = any(word in combined_text for word in ("official", "official site", "official app", "login"))
             recurrence = min(len(matches) / 4, 1.0)
@@ -150,8 +191,9 @@ class TargetResolver:
             # become the default target.
             if not domain_match and not official_signal:
                 continue
+            prefix = "Probable related domain" if conservative_identity else f"direct {'domain' if domain_match else 'title/snippet'} match"
             reason = (
-                f"direct {'domain' if domain_match else 'title/snippet'} match; domain similarity {domain_similarity:.0%}; title similarity {title_similarity:.0%}; "
+                f"{prefix}; domain similarity {domain_similarity:.0%}; title similarity {title_similarity:.0%}; "
                 f"appeared {len(matches)} time(s)"
             )
             scored.append(TargetCandidate(domain, round(score, 2), reason, len(matches)))
@@ -162,6 +204,8 @@ class TargetResolver:
     def build_search_identities(target: NormalizedTarget) -> list[SearchIdentity]:
         """Build conservative, auditable aliases without inventing unrelated brands."""
         domain = target.domain.casefold().removeprefix("www.")
+        if not domain:
+            return [SearchIdentity(target.brand, "EXACT_BRAND", 1.0, "Application name supplied by the operator")]
         label = domain.split(".", 1)[0]
         brand = " ".join((target.brand or label).split())
         identities = [SearchIdentity(domain, "DOMAIN", 1.0, "Resolved target domain")]

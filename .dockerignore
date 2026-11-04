@@ -1,0 +1,15 @@
+.git
+.agents
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.env
+data/*.db
+data/browser_sessions/
+screenshots/*
+evidence/*
+reports/*
+docs/*.docx
+docs/*.html
+*.tar.gz

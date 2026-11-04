@@ -31,9 +31,45 @@ class DorkGenerator:
     }
 
     PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-
+    GAMBLING_EVIDENCE_KEYWORDS = (
+        "bet", "betting", "sports betting", "sportsbook", "bookmaker", "wager", "wagering",
+        "odds", "stake", "bet slip", "in-play betting", "cash betting", "real money",
+        "gambling", "gaming", "casino", "online casino", "live casino", "slot", "slots",
+        "jackpot", "roulette", "baccarat", "blackjack", "poker", "teen patti", "andar bahar",
+        "aviator", "crash game", "lottery", "winnings", "payout", "bonus", "free bet",
+    )
     def __init__(self, config_path: Path | str | None = None):
         self.config_path = Path(config_path or BASE_DIR / "config" / "search_queries.yaml")
+        self._scoring_catalog: dict[str, tuple[str, ...]] | None = None
+
+    def scoring_catalog(self) -> dict[str, tuple[str, ...]]:
+        """Load reviewed scoring vocabulary without treating common platforms as evidence."""
+        if self._scoring_catalog is not None:
+            return self._scoring_catalog
+        try:
+            payload = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise QueryConfigurationError(f"Unable to load scoring keywords: {exc}") from exc
+        raw_groups = payload.get("scoring_keywords", {})
+        if not isinstance(raw_groups, dict):
+            raise QueryConfigurationError("search_queries.yaml must contain a 'scoring_keywords' mapping.")
+        self._scoring_catalog = {
+            str(name): tuple(str(value) for value in values)
+            for name, values in raw_groups.items()
+            if isinstance(values, list) and name != "excluded_noise_domains"
+        }
+        return self._scoring_catalog
+
+    def _context_keywords_for_category(self, category: str) -> tuple[str, ...]:
+        catalog = self.scoring_catalog()
+        groups: list[str] = []
+        if category in {"gambling_activity", "promotions", "support_social", "applications", "external_evidence"}:
+            groups.append("gambling_extended")
+        if category in {"money_flow", "payment_methods", "payment_proof", "external_evidence", "external_complaints"}:
+            groups.extend(("payment", "transactions"))
+        if category in {"money_flow", "payment_methods", "payment_proof", "external_evidence"}:
+            groups.append("crypto")
+        return tuple(keyword for group in groups for keyword in catalog.get(group, ()))
 
     def load(self) -> list[dict]:
         if not self.config_path.exists():
@@ -59,13 +95,47 @@ class DorkGenerator:
 
     def generate(self, target: NormalizedTarget, brand: str | None = None) -> list[DorkQuery]:
         resolved_brand = (brand or target.brand or target.domain.split(".", 1)[0]).strip()
-        main_brand = TargetResolver.derive_main_brand(resolved_brand)
         queries = []
+        if not target.domain:
+            # Every query remains anchored to the supplied name. Never render
+            # domain templates with an empty site: or an empty quoted identity.
+            name = resolved_brand.replace('"', ' ').strip()
+            templates = (
+                '"{name}" app',
+                '"{name}" APK Android',
+                '"{name}" site:play.google.com/store/apps',
+                '"{name}" site:apps.apple.com',
+                '"{name}" IPA iOS',
+                '"{name}" app developer package version',
+                '"{name}" site:apkpure.com',
+                '"{name}" site:apkmirror.com',
+                '"{name}" application download',
+                '"{name}" app reviews',
+                '"{name}" app support contact',
+                '"{name}"',
+            )
+            queries = [DorkQuery(
+                query_id=f"APP_{index:03d}", category="applications",
+                name="Application name discovery", priority="high",
+                query=template.format(name=name),
+                description="Find app listings, download references and related information by name",
+                evidence_keywords=("apk", "ipa", "android", "ios", "developer", "version", "package"),
+            ) for index, template in enumerate(templates, 1)]
+        main_brand = TargetResolver.derive_main_brand(resolved_brand)
         for entry in self.load():
             if not entry["enabled"]:
                 continue
+            template = str(entry["query"])
+            if not target.domain:
+                # Certificate Transparency queries need an actual domain. Other
+                # catalog topics can search for the application's name.
+                if entry["category"] == "certificate_transparency":
+                    continue
+                template = template.replace('-site:{domain}', '')
+                template = template.replace('site:{domain}', '"{brand}"')
+                template = template.replace('{domain}', '{brand}')
             try:
-                rendered = str(entry["query"]).format(
+                rendered = template.format(
                     domain=target.domain,
                     brand=resolved_brand,
                     main_brand=main_brand,
@@ -73,6 +143,11 @@ class DorkGenerator:
             except KeyError as exc:
                 raise QueryConfigurationError(f"Unknown placeholder in {entry['id']}: {exc}") from exc
             configured_keywords = entry.get("evidence_keywords") or self._derive_keywords(str(entry["query"]))
+            configured_keywords = (
+                list(configured_keywords)
+                + list(self.GAMBLING_EVIDENCE_KEYWORDS)
+                + list(self._context_keywords_for_category(str(entry["category"])))
+            )
             queries.append(
                 DorkQuery(
                     query_id=str(entry["id"]),
@@ -88,7 +163,15 @@ class DorkGenerator:
                     document_type=str(entry.get("document_type", "pdf" if "filetype:pdf" in rendered.casefold() else "")),
                 )
             )
-        return sorted(queries, key=lambda item: (self.PRIORITY_ORDER.get(item.priority, 9), item.query_id))
+        ordered = sorted(queries, key=lambda item: (self.PRIORITY_ORDER.get(item.priority, 9), item.query_id))
+        if not target.domain:
+            # Domain and brand templates can become identical after adaptation.
+            # Run each distinct query once, matching the stored query catalog.
+            distinct = {}
+            for query in ordered:
+                distinct.setdefault(query.query, query)
+            return list(distinct.values())
+        return ordered
 
     @staticmethod
     def _derive_keywords(query_template: str) -> list[str]:

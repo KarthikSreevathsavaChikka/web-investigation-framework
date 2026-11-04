@@ -57,7 +57,7 @@ class RiskScorer:
             )
 
         score = min(sum(totals.values()), 100)
-        level = "Informational"
+        level = "Informational" if indicators else "Not assessed"
         for threshold, label in ((80, "Critical"), (60, "High"), (40, "Medium"), (20, "Low")):
             if score >= threshold:
                 level = label

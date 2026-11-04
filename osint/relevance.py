@@ -7,6 +7,14 @@ from urllib.parse import urlsplit
 from osint.models import NormalizedTarget, SearchResult
 
 
+# Explicit aliases must represent a reviewed brand identity.  Do not derive
+# aliases from individual words such as "reddy", which would accept unrelated
+# people and businesses.
+REVIEWED_BRAND_ALIASES: dict[str, tuple[str, ...]] = {
+    "reddybook": ("reddy anna book", "reddyannabook"),
+}
+
+
 @dataclass(frozen=True)
 class RelevanceAssessment:
     accepted: bool
@@ -19,14 +27,15 @@ def build_target_variants(target: NormalizedTarget) -> tuple[str, ...]:
     domain = target.domain.casefold().removeprefix("www.")
     label = domain.split(".", 1)[0]
     compact_brand = re.sub(r"[^a-z0-9]", "", (target.brand or label).casefold())
-    variants = {domain, label, compact_brand}
+    variants = {domain, label, compact_brand, " ".join(target.brand.casefold().split())}
+    variants.update(REVIEWED_BRAND_ALIASES.get(compact_brand, ()))
     match = re.fullmatch(r"([a-z][a-z-]*?)(\d+)", label)
     if match:
         word, digits = match.groups()
         variants.add(f"{word} {digits}")
         if word.endswith("s") and len(word) > 5:
             variants.update({word[:-1], f"{word[:-1]} {digits}"})
-    return tuple(sorted((item for item in variants if len(item) >= 5), key=lambda value: (-len(value), value)))
+    return tuple(sorted((item for item in variants if len(item) >= (2 if not domain else 5)), key=lambda value: (-len(value), value)))
 
 
 def _variant_in_text(variant: str, text: str) -> bool:
@@ -45,7 +54,7 @@ def assess_serp_result(result: SearchResult, target: NormalizedTarget) -> Releva
     variants = build_target_variants(target)
     hostname = (urlsplit(result.url).hostname or "").casefold().strip(".")
     target_domain = target.domain.casefold().removeprefix("www.")
-    if hostname == target_domain or hostname.endswith(f".{target_domain}"):
+    if target_domain and (hostname == target_domain or hostname.endswith(f".{target_domain}")):
         return RelevanceAssessment(True, target_domain, "hostname", "Result belongs to the target domain")
     for field, value in (("url", result.url), ("title", result.title), ("snippet", result.snippet)):
         if matched := find_target_reference(value, variants):
@@ -65,7 +74,7 @@ def assess_page_relevance(
     target_domain = target.domain.casefold().removeprefix("www.")
     for field, value in (("final_url", final_url), ("canonical_url", canonical_url)):
         hostname = (urlsplit(value).hostname or "").casefold().strip(".")
-        if hostname == target_domain or hostname.endswith(f".{target_domain}"):
+        if target_domain and (hostname == target_domain or hostname.endswith(f".{target_domain}")):
             return RelevanceAssessment(True, target_domain, field, "Page URL belongs to target domain")
     for field, value in (("page_title", page_title), ("visible_text", visible_text)):
         if matched := find_target_reference(value, variants):

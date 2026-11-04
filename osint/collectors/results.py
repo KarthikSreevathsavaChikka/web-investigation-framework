@@ -4,14 +4,17 @@ import os
 import time
 import hashlib
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
-from config import DATA_DIR
+from config import EVIDENCE_DIR
 from osint.evidence import PublicPageEvidenceExtractor
-from osint.documents import assess_pdf, render_pdf_pages
+from osint.cancellation import InvestigationCancelled
+from osint.documents import assess_docx, assess_pdf, render_docx_pages, render_pdf_pages
 from osint.http import get_public_url
+from osint.coverage import observation_has_gap
+from osint.url_tools import ResourceClassification, classify_response_content, classify_source_url
 from osint.models import CollectorResult, NormalizedTarget, Observation
 from osint.relevance import assess_page_relevance
 
@@ -20,7 +23,11 @@ class PublicSearchResultCollector:
     name = "public_search_results"
     SKIPPED_SOURCE_TYPES = {
         "social_x", "social_facebook", "social_instagram", "social_youtube",
-        "social_reddit", "social_quora", "telegram", "app_download",
+        "social_reddit", "social_quora", "telegram",
+    }
+    PDF_MEDIA_TYPES = {"application/pdf", "application/x-pdf"}
+    DOCX_MEDIA_TYPES = {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     }
 
     def collect(
@@ -29,13 +36,20 @@ class PublicSearchResultCollector:
         sources: list[dict],
         timeout: int,
         investigation_id: str,
+        cancel_check=None,
     ) -> CollectorResult:
         started = time.monotonic()
         observations = []
         max_bytes = max(100_000, min(int(os.getenv("OSINT_MAX_ARTIFACT_BYTES", "5000000")), 25_000_000))
         request_delay = max(0.0, min(float(os.getenv("OSINT_SOURCE_REQUEST_DELAY", "0.5")), 5.0))
         for source in sources:
+            if cancel_check and cancel_check():
+                raise InvestigationCancelled("Investigation cancelled during source collection")
             if source.get("source_type") in self.SKIPPED_SOURCE_TYPES:
+                continue
+            source_class = classify_source_url(source["source_url"])
+            if not source_class.is_content:
+                observations.append(self.resource_observation(source, source_class))
                 continue
             if request_delay:
                 time.sleep(request_delay)
@@ -75,14 +89,39 @@ class PublicSearchResultCollector:
                 )
                 continue
 
-            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
-            if content_type == "application/pdf" or source.get("source_type") == "pdf_document":
-                evidence_keywords = tuple(
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            response_class = classify_response_content(response.url, content_type, response.content[:1024])
+            if not response_class.is_content:
+                observations.append(self.resource_observation(
+                    source, response_class, final_url=response.url, content_type=content_type,
+                ))
+                continue
+            suffix = Path(unquote(urlsplit(response.url).path)).suffix.lower()
+            is_pdf = response_class.kind == "document" and (
+                content_type in self.PDF_MEDIA_TYPES or suffix == ".pdf" or response.content[:1024].lstrip().startswith(b"%PDF-")
+            )
+            is_docx = response_class.kind == "document" and (
+                content_type in self.DOCX_MEDIA_TYPES or suffix == ".docx"
+            )
+            is_document_lead = source.get("source_type") in {
+                "pdf_document",
+                "other_document",
+            }
+            if is_pdf or is_docx:
+                evidence_keywords = tuple(dict.fromkeys(
+                    keyword
+                    for query in source.get("discovery_queries", [])
+                    for keyword in query.get("evidence_keywords", [])
+                )) or tuple(
                     keyword
                     for terms in PublicPageEvidenceExtractor.TERMS.values()
                     for keyword in terms
                 )
-                document_assessment = assess_pdf(response.content, target, evidence_keywords)
+                document_assessment = (
+                    assess_pdf(response.content, target, evidence_keywords)
+                    if is_pdf
+                    else assess_docx(response.content, target, evidence_keywords)
+                )
                 if not document_assessment.accepted:
                     observations.append(
                         Observation(
@@ -94,7 +133,7 @@ class PublicSearchResultCollector:
                             0.0,
                             metadata={
                                 "final_url": response.url,
-                                "source_type": "pdf_document",
+                                "source_type": "pdf_document" if is_pdf else "other_document",
                                 "relevance_status": "manual_required" if "could not be extracted" in document_assessment.reason else "rejected_irrelevant",
                                 "relevance_reason": document_assessment.reason,
                             },
@@ -102,13 +141,30 @@ class PublicSearchResultCollector:
                     )
                     continue
                 artifact_path, artifact_hash = self._store_artifact(
-                    investigation_id, response.content, ".pdf"
+                    investigation_id, response.content, ".pdf" if is_pdf else ".docx"
                 )
-                page_screenshots = render_pdf_pages(
-                    artifact_path,
-                    document_assessment.relevant_pages,
-                    Path(artifact_path).parent / f"{artifact_hash}_pages",
+                highlight_terms = tuple(dict.fromkeys((
+                    document_assessment.matched_target_variant,
+                    *document_assessment.matched_keywords,
+                )))
+                page_screenshots = (
+                    render_pdf_pages(
+                        artifact_path,
+                        tuple(document_assessment.relevant_pages),
+                        Path(artifact_path).parent / f"{artifact_hash}_pages",
+                        highlight_terms=highlight_terms,
+                    )
+                    if is_pdf
+                    else render_docx_pages(
+                        artifact_path,
+                        Path(artifact_path).parent / f"{artifact_hash}_pages",
+                        target,
+                        evidence_keywords,
+                    )
                 )
+                file_name = Path(unquote(urlsplit(response.url).path)).name
+                if not file_name.lower().endswith((".pdf", ".docx")):
+                    file_name = f"{artifact_hash}{'.pdf' if is_pdf else '.docx'}"
                 observations.append(
                     Observation(
                         self.name, "Documents", "PUBLIC_DOCUMENT", response.url,
@@ -117,9 +173,14 @@ class PublicSearchResultCollector:
                             "document_type": document_assessment.document_type,
                             "content_length": len(response.content),
                             "final_url": response.url,
-                            "source_type": "pdf_document",
+                            "source_type": "pdf_document" if is_pdf else "other_document",
                             "artifact_path": artifact_path,
                             "sha256": artifact_hash,
+                            "file_name": file_name,
+                            "media_type": content_type or (
+                                "application/pdf" if is_pdf else next(iter(self.DOCX_MEDIA_TYPES))
+                            ),
+                            "discovery_queries": source.get("discovery_queries", []),
                             "matched_target_variant": document_assessment.matched_target_variant,
                             "matched_keywords": list(document_assessment.matched_keywords),
                             "relevant_pages": list(document_assessment.relevant_pages),
@@ -131,22 +192,19 @@ class PublicSearchResultCollector:
                     )
                 )
                 continue
-            if "html" not in content_type:
-                suffix = Path(urljoin(response.url, "")).suffix[:10] or ".bin"
-                artifact_path, artifact_hash = self._store_artifact(
-                    investigation_id, response.content, suffix
-                )
+            if (is_document_lead and "html" not in content_type) or response_class.kind == "document":
                 observations.append(
                     Observation(
-                        self.name, "Documents", "PUBLIC_DOCUMENT", response.url,
-                        source_url, 0.85,
+                        self.name, "Collection diagnostics", "DOCUMENT_REJECTED",
+                        "manual_required", source_url, 0.0,
                         metadata={
-                            "document_type": content_type or "unknown",
-                            "content_length": len(response.content),
                             "final_url": response.url,
                             "source_type": source.get("source_type"),
-                            "artifact_path": artifact_path,
-                            "sha256": artifact_hash,
+                            "relevance_status": "manual_required",
+                            "relevance_reason": (
+                                f"Unsupported document format ({content_type or suffix or 'unknown'}); "
+                                "only verified PDF and DOCX files are stored automatically"
+                            ),
                         },
                     )
                 )
@@ -190,6 +248,7 @@ class PublicSearchResultCollector:
                     metadata={
                         "final_url": response.url,
                         "meta_description": description,
+                        "page_text": visible_text[:20_000] if not target.domain or source.get("source_type") == "app_download" else "",
                         "canonical_url": canonical,
                         "document_type": content_type,
                         "source_type": source.get("source_type"),
@@ -211,15 +270,39 @@ class PublicSearchResultCollector:
             )
         return CollectorResult(
             self.name,
-            "COMPLETED",
+            "PARTIAL" if any(observation_has_gap(item) for item in observations) else "COMPLETED",
             observations,
             duration_seconds=time.monotonic() - started,
         )
 
     @staticmethod
+    def resource_observation(
+        source: dict, classification: ResourceClassification, *, final_url: str = "", content_type: str = "",
+    ) -> Observation:
+        """Keep excluded URLs auditable without interpreting their bytes as prose."""
+        return Observation(
+            "public_search_results", "Collection diagnostics",
+            "MEDIA_REFERENCE" if classification.kind == "media" else "NON_CONTENT_RESOURCE",
+            "skipped_non_content", source["source_url"], 0.0,
+            metadata={
+                "final_url": final_url or source["source_url"],
+                "source_type": source.get("source_type"),
+                "resource_kind": classification.kind,
+                "media_type": content_type,
+                "reason": classification.reason,
+                "classification_basis": "response" if final_url else "url_hint",
+                "title": source.get("title") or "",
+                "discovery_queries": source.get("discovery_queries", []),
+            },
+        )
+
+    @staticmethod
     def _store_artifact(investigation_id: str, content: bytes, suffix: str) -> tuple[str, str]:
         digest = hashlib.sha256(content).hexdigest()
-        artifact_dir = DATA_DIR / "osint_artifacts" / investigation_id
+        # Workers and the Streamlit application run in separate containers.
+        # Store document artifacts on the shared evidence volume so the UI can
+        # read and display every generated page capture.
+        artifact_dir = EVIDENCE_DIR / "documents" / investigation_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
         artifact_path = artifact_dir / f"{digest}{suffix}"
         if not artifact_path.exists():
